@@ -214,12 +214,13 @@ bash install_hkprecal_env.sh
 source env.sh
 ```
 ### 2)Raw -> ROOT (runners/)
-The `runners/` scripts submit jobs to the cluster. Keep this layer separate from `uap/` analysis.
+The `runners/` scripts submit jobs to the cluster. Keep this layer separate from `uap/` analysis. `--Nevent` is the maximum number of events if no `--Nevent` option txt2root conversion is applied for all recorded events. `--theta` and `--phi` are also options to extract specific  angle combinations. If you run `aus_runner-1028-opt.py` without angle options all angle configurations are processed. 
 
 Typical usage:
 ```bash
 python3 runners/aus_cluster_runner.py --raw-dir /path/to/aus/raw --out-dir /path/to/aus/root --max-active-jobs 100
 python3 runners/kor_cluster_runner.py --raw-dir /path/to/kor/raw --out-dir /path/to/kor/root --max-active-jobs 100
+python3 runners/aus_runner-1028.py --raw-dir /media/precalib/rawdata/aus/commissioning/txt --template ./my_R12860_config.yaml --out-dir /media/precalib/rawdata/aus/UAP-out --channels 0,1,3,7 --Nevent 10000 --theta 10 20 --phi 0 90
 ```
 
 ### 3) ROOT -> CSV (Hydra mode)

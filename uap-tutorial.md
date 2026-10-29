@@ -36,10 +36,10 @@ Before each run, execute `source env.sh`. We recommend adding the following line
 UAP environment is loaded automatically in each new Bash session:
 
 ```bash
-export UAP_ROOT_THISROOT=/path/to/root/bin/thisroot.sh
-export PYRATE_HOME=/path/to/pyrate
-export KOR_NTP_HOME=/path/to/kor_ntp
-source /path/to/hkprecal-uap/env.sh
+export PYRATE_HOME=/media/precalib/waveformreader/aus_pyrate/darkmatteraustralia-pyrate-3c2e05d64b61
+export KOR_NTP_HOME=/media/precalib/waveformreader/kor_ntp
+export UAP_ROOT_THISROOT=/home/shuoyu/.local/miniforge3/envs/hkprecal-uap/bin/thisroot.sh
+source /home/precalib/UAP/hkprecal-uap/env.sh
 ```
 
 ### 1.3 Check the environment
