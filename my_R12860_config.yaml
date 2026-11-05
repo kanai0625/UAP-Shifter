@@ -1,0 +1,361 @@
+# Object duplication lists
+<channels>: [0, 1, 3, 7]
+
+InputName:
+  type: input
+  algorithm: EventBuilder
+  parallel: True
+  ch0:
+    reader: ReaderWaveDump
+    files:
+      - /default/path/to/wave0.txt
+  ch1:
+    reader: ReaderWaveDump
+    files:
+      - /default/path/to/wave1.txt
+  ch3:
+    reader: ReaderWaveDump
+    files:
+      - /default/path/to/wave3.txt
+  ch7:
+    reader: ReaderWaveDump
+    files:
+      - /default/path/to/wave7.txt
+
+# -----------------------------------------------------------
+# Variables & Waveforms
+# -----------------------------------------------------------
+
+Baseline_CH<channels>:
+  algorithm: Baseline
+  samples: 40
+  input:
+    waveform: ch<channels>.waveform
+  output:
+    baseline: Baseline_CH<channels>
+    stddev: BaselineStdDev_CH<channels>
+    delta: BaselineDelta_CH<channels>
+
+# 0: Laser (pos), 1: SiPM (pos), 3: Target PMT (neg), 7: Monitor PMT (neg)
+CorrectedWaveform_CH0:
+  algorithm: CorrectedWaveform
+  vpp: 2.0
+  adcrange: 16384
+  polarity: pos
+  units: mV
+  input:
+    waveform: ch0.waveform
+    baseline: Baseline_CH0
+
+CorrectedWaveform_CH1:
+  algorithm: CorrectedWaveform
+  vpp: 2.0
+  adcrange: 16384
+  polarity: pos
+  units: mV
+  input:
+    waveform: ch1.waveform
+    baseline: Baseline_CH1
+
+CorrectedWaveform_CH3:
+  algorithm: CorrectedWaveform
+  vpp: 2.0
+  adcrange: 16384
+  polarity: neg
+  units: mV
+  input:
+    waveform: ch3.waveform
+    baseline: Baseline_CH3
+
+CorrectedWaveform_CH7:
+  algorithm: CorrectedWaveform
+  vpp: 2.0
+  adcrange: 16384
+  polarity: neg
+  units: mV
+  input:
+    waveform: ch7.waveform
+    baseline: Baseline_CH7
+
+############################## WINDOWS #################################
+
+PulseRangeStop_CH<channels>:
+  algorithm: Calculator
+  equation: A + 50
+  input:
+    A: PulseStart_CH<channels>
+
+PulseRangeStart_CH<channels>:
+  algorithm: Calculator
+  equation: A - 10
+  input:
+    A: PulseStart_CH<channels>
+
+PromptRangeStart_CH<channels>:
+  algorithm: Calculator
+  equation: A - 10
+  input:
+    A: PeakLocation_CH<channels>
+
+DelayedRangeStop_CH<channels>:
+  algorithm: Calculator
+  equation: A + 20
+  input:
+    A: PeakLocation_CH<channels>
+
+LasTrigRangeStop:
+  algorithm: Calculator
+  equation: A + 161
+  input:
+    A: PeakLocation_CH1
+
+############################## VARIABLES #################################
+
+ChargeConstant:
+  algorithm: ChargeConstant
+  impedance: 50
+  rate: 500e6
+  unit: pC
+  waveform_unit: mV
+
+PeakHeight_CH<channels>:
+  algorithm: PeakHeight
+  window: false
+  input:
+    waveform: CorrectedWaveform_CH<channels>
+    start: PulseRangeStart_CH<channels>
+    stop: PulseRangeStop_CH<channels>
+  output:
+    height: PeakHeight_CH<channels>
+    location: PeakLocation_CH<channels>
+
+TotalCharge_CH<channels>:
+  algorithm: Charge
+  impedance: 50
+  rate: 500e6
+  unit: pC
+  waveform_unit: mV
+  input:
+    waveform: CorrectedWaveform_CH<channels>
+
+PulseCharge_CH<channels>:
+  algorithm: Charge
+  impedance: 50
+  rate: 500e6
+  unit: pC
+  waveform_unit: mV
+  input:
+    waveform: CorrectedWaveform_CH<channels>
+    start: PulseRangeStart_CH<channels>
+    stop: PulseRangeStop_CH<channels>
+
+LasTrigCharge_CH<channels>:
+  algorithm: Charge
+  impedance: 50
+  rate: 500e6
+  unit: pC
+  waveform_unit: mV
+  input:
+    waveform: CorrectedWaveform_CH<channels>
+    start: PeakLocation_CH1
+    stop: LasTrigRangeStop
+
+PromptCharge_CH<channels>:
+  algorithm: Charge
+  impedance: 50
+  rate: 500e6
+  unit: pC
+  waveform_unit: mV
+  input:
+    waveform: CorrectedWaveform_CH<channels>
+    start: PromptRangeStart_CH<channels>
+    stop: PeakLocation_CH<channels>
+
+DelayedCharge_CH<channels>:
+  algorithm: Charge
+  impedance: 50
+  rate: 500e6
+  unit: pC
+  waveform_unit: mV
+  input:
+    waveform: CorrectedWaveform_CH<channels>
+    start: PeakLocation_CH<channels>
+    stop: DelayedRangeStop_CH<channels>
+
+PromptPulseChargeRatio_CH<channels>:
+  algorithm: Calculator
+  equation: A/B
+  input:
+    A: PromptCharge_CH<channels>
+    B: PulseCharge_CH<channels>
+
+DelayedPulseChargeRatio_CH<channels>:
+  algorithm: Calculator
+  equation: A/B
+  input:
+    A: DelayedCharge_CH<channels>
+    B: PulseCharge_CH<channels>
+
+PulseStart_CH0:
+  algorithm: LeadingEdgeDiscriminator
+  offset: 0
+  threshold: 100
+  input:
+    waveform: CorrectedWaveform_CH0
+  output:
+    single: PulseStart_CH0
+    multi: LEDTimes_CH0
+
+PulseStart_CH1:
+  algorithm: LeadingEdgeDiscriminator
+  offset: 0
+  threshold: 100
+  input:
+    waveform: CorrectedWaveform_CH1
+  output:
+    single: PulseStart_CH1
+    multi: LEDTimes_CH1
+
+PulseStart_CH3:
+  algorithm: LeadingEdgeDiscriminator
+  offset: 0
+  threshold: 5
+  input:
+    waveform: CorrectedWaveform_CH3
+  output:
+    single: PulseStart_CH3
+    multi: LEDTimes_CH3
+
+PulseStart_CH7:
+  algorithm: LeadingEdgeDiscriminator
+  offset: 0
+  threshold: 5
+  input:
+    waveform: CorrectedWaveform_CH7
+  output:
+    single: PulseStart_CH7
+    multi: LEDTimes_CH7
+ 
+CFD_CH0:
+  algorithm: CFD
+  delay: 5
+  scale: 1
+  cfd_threshold: 10
+  savecfd: True
+  input:
+    waveform: CorrectedWaveform_CH0
+  output:
+    zcp: CFD_CH0
+    times: CFDTimes_CH0
+    trace: CFDTrace_CH0
+
+CFD_CH1:
+  algorithm: CFD
+  delay: 5
+  scale: 1
+  cfd_threshold: 100
+  savecfd: True
+  input:
+    waveform: CorrectedWaveform_CH1
+  output:
+    zcp: CFD_CH1
+    times: CFDTimes_CH1
+    trace: CFDTrace_CH1
+
+CFD_CH3:
+  algorithm: CFD
+  delay: 5
+  scale: 1
+  cfd_threshold: 5
+  savecfd: True
+  input:
+    waveform: CorrectedWaveform_CH3
+  output:
+    zcp: CFD_CH3
+    times: CFDTimes_CH3
+    trace: CFDTrace_CH3
+
+CFD_CH7:
+  algorithm: CFD
+  delay: 5
+  scale: 1
+  cfd_threshold: 5
+  savecfd: True
+  input:
+    waveform: CorrectedWaveform_CH7
+  output:
+    zcp: CFD_CH7
+    times: CFDTimes_CH7
+    trace: CFDTrace_CH7
+
+MeanTime_CH<channels>:
+  algorithm: MeanTime
+  rate: 500e6
+  input:
+    waveform: CorrectedWaveform_CH<channels>
+    start: PulseRangeStart_CH<channels>
+    stop: PulseRangeStop_CH<channels>
+
+MeanTimeLasTrig_CH<channels>:
+  algorithm: MeanTime
+  rate: 500e6
+  input:
+    waveform: CorrectedWaveform_CH<channels>
+    start: PeakLocation_CH1
+    stop: LasTrigRangeStop
+
+Moments_CH<channels>:
+  algorithm: Moment
+  rate: 500e6
+  input:
+    waveform: CorrectedWaveform_CH<channels>
+    start: PulseRangeStart_CH<channels>
+    stop: PulseRangeStop_CH<channels>
+  output:
+    mean: Mean_CH<channels>
+    stddev: Stddev_CH<channels>
+    skew: Skew_CH<channels>
+    kurtosis: Kurtosis_CH<channels>
+
+CAP_CH<channels>:
+  algorithm: ChargeAccumulatedPulse
+  integration_times: [5, 10, 15, 20, 25, 30, 35, 40, 50]
+  input:
+    waveform: CorrectedWaveform_CH<channels>
+    start: PulseRangeStart_CH<channels>
+    stop: PulseRangeStop_CH<channels>
+
+FFT__CH<channels>:
+  algorithm: FFT
+  rate: 500e6
+  bins: 1024
+  input:
+    waveform: CorrectedWaveform_CH<channels>
+    start: PulseRangeStart_CH<channels>
+    stop: PulseRangeStop_CH<channels>
+  output:
+    real: FFT_CH<channels>_real
+    imaginary: FFT_CH<channels>_imaginary
+    frequencies: FFT_CH<channels>_frequencies
+
+AverageWaveform_CH<channels>:
+  algorithm: AverageWaveform
+  input:
+    waveform: CorrectedWaveform_CH<channels>
+
+# -----------------------------------------------------------
+# Trees
+# -----------------------------------------------------------
+
+Tree_CH<channels>:
+  algorithm: TreeMaker
+  file: output_file.root
+  type: output
+  input:
+    vector<double>:
+      - {CorrectedWaveform: CorrectedWaveform_CH<channels>}
+      - {FFT_real: FFT_CH<channels>_real,
+         FFT_imaginary: FFT_CH<channels>_imaginary,
+         FFT_frequencies: FFT_CH<channels>_frequencies}
+    double:
+      - {PulseStart: PulseStart_CH<channels>, PulseCharge: PulseCharge_CH<channels>, PeakHeight: PeakHeight_CH<channels>, PeakLocation: PeakLocation_CH<channels>, CFDPulseStart: CFD_CH<channels>}

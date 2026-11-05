@@ -1,0 +1,42 @@
+# @package _global_
+hydra:
+  run:
+    dir: ${oc.env:UAP_HOME,.}/outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}-csv2plot
+  job:
+    chdir: true
+
+# コマンドラインから上書きするディレクトリパス（??? は実行時の指定を必須にするという意味）
+input_dir: ???
+
+x_label: Position angle (deg)
+y_label: Gain
+title: AUS PMT Gain Angular Dependency (Phi=0)
+x_min: null
+x_max: null
+y_min: null
+y_max: null
+hline: null
+out_name: aus_gain_phi0.png
+points_csv: aus_gain_phi0_points.csv
+
+line_order: [aus_phi0]
+
+lines:
+  aus_phi0:
+    system: aus
+    csv: ${input_dir}/aus_charge_results.csv
+    label: AUS Gain (Phi=0)
+    mode: single_phi
+    phi_col: phi
+    theta_col: theta
+    y_col: gain
+    yerr_col: gain_err
+    phi: 0
+    flip_sign: false
+    use_abs_theta: false
+    use_hamamatsu_angle: true
+    line_color: C0
+    marker: o
+    line_style: "-"
+    line_width: 1.5
+    marker_size: 4.8
