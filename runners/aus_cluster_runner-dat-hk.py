@@ -247,34 +247,37 @@ def write_job_script(
     py_ver = f"python{sys.version_info.major}.{sys.version_info.minor}"
     conda_sh = Path(current_prefix).parents[1] / "etc" / "profile.d" / "conda.sh"
 
-    env_lines = []
-    
+    # Pyrate ソースコードディレクトリのパス
+    pyrate_src = "/disk03/usr8/kanai062/UAP-Shifter/aus_pyrate/darkmatteraustralia-pyrate-3c2e05d64b61"
+
+    env_lines = [
+        "set +u"
+    ]
+
     # Conda環境のアクティベート
     if conda_sh.is_file():
         env_lines.append(f'source "{conda_sh}"')
         env_lines.append(f'conda activate "{current_prefix}"')
 
-    # 外部ROOTとの衝突回避（Conda内のthisrootのみ使用、外部のsklib等は読み込まない）
     if root_thisroot and Path(root_thisroot).is_file() and "miniforge3" in str(root_thisroot):
         env_lines.append(f'source "{root_thisroot}"')
 
-    # hk キューノード向けにパスを完全固定
+    # パス設定（PyrateソースディレクトリをPYTHONPATHに追加）
     env_lines.append(f'export CONDA_PREFIX="{current_prefix}"')
     env_lines.append(f'export PATH="{current_prefix}/bin:$PATH"')
     env_lines.append(f'export LD_LIBRARY_PATH="{current_prefix}/lib:{current_prefix}/lib/root:${{LD_LIBRARY_PATH:-}}"')
-    env_lines.append(f'export PYTHONPATH="{current_prefix}/lib/{py_ver}/site-packages:${{PYTHONPATH:-}}"')
+    env_lines.append(f'export PYTHONPATH="{pyrate_src}:{current_prefix}/lib/{py_ver}/site-packages:${{PYTHONPATH:-}}"')
 
     env_setup_str = "\n".join(env_lines)
 
+    # python3 -m pyrate で直接モジュール起動
     text = f"""{header_str}
-set -euo pipefail
 {env_setup_str}
-python3 "{pyrate_cmd}" -c "{config_path}"{nevent_flag} > "{log_path}" 2>&1
+set -eo pipefail
+python3 -m pyrate -c "{config_path}"{nevent_flag} > "{log_path}" 2>&1
 """
     job_script.write_text(text, encoding="utf-8")
     job_script.chmod(0o755)
-
-
 def main():
     repo_root = Path(__file__).resolve().parents[1]
     uap_home = Path(os.environ.get("UAP_HOME", str(repo_root))).resolve()

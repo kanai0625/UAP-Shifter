@@ -1,3 +1,22 @@
+__UAP Manual on sukap 1106ver__
+updates from 1105ver : revising the job submission part and environment.
+
+You can see the latest version on `https://github.com/kanai0625/UAP-Shifter.git` branches
+If you want to create your own environment, you may copy environments to your working directory 
+e.g.
+```
+rsync -r /disk03/usr8/kanai062/UAP-Shifter/miniforge3 /your/working/dir
+```
+```
+rsync -r disk03/usr8/kanai062/UAP-Shifter/aus_pyrate /your/pyrate/dir
+```
+```
+rsync -r /disk03/usr8/kanai062/UAP-Shifter/kor_ntp /your/kor_ntp
+```
+
+Here you use following commands with changing paths to your counterparts; PMT data path, environment, output, UAP directory, etc.
+
+
 # UAP on sukap 
 ```
 /disk03/usr8/kanai062/UAP-Shifter
@@ -8,14 +27,14 @@
 
 ```
 cd /disk03/usr8/kanai062/UAP-Shifter
-source env.sh
 ```
 
 ## 0.2 : Input environment paths and activate the virtual environment (all paths are fixed)
 ```
-unset PYRATE_HOME
+export PYRATE_HOME=/disk03/usr8/kanai062/UAP-Shifter/aus_pyrate/darkmatteraustralia-pyrate-3c2e05d64b61
 export KOR_NTP_HOME=/disk03/usr8/kanai062/UAP-Shifter/kor_ntp
 export UAP_ROOT_THISROOT=/disk03/usr8/kanai062/UAP-Shifter/miniforge3/envs/hkprecal-uap/bin/thisroot.sh
+export PYTHONPATH=/disk03/usr8/kanai062/UAP-Shifter/aus_pyrate/darkmatteraustralia-pyrate-3c2e05d64b61:$PYTHONPATH
 source /disk03/usr8/kanai062/UAP-Shifter/miniforge3/etc/profile.d/conda.sh
 conda activate /disk03/usr8/kanai062/UAP-Shifter/miniforge3/envs/hkprecal-uap
 ```
@@ -328,60 +347,101 @@ python3 main.py csv2plot --config-name csv2plot_default-aus input_dir=/disk03/us
 
 
 
-## AUS job submission of raw2root
-1000 event test. "--elapse" is the maximum run time hh:mm:ss, "--Nevent" is the number of events to be converted.
+## AUS job submission of raw2root 
+I recommend to use "hk" queue and "aus_cluster_runner-dat-hk.py" instead of "all" queue.
+Job submission trial to "hk" queue
+
+PMT1 version : the target PMT channel is 3
 ```
-python3 runners/aus_cluster_runner-dat.py \
-  --raw-dir /disk03/hk04/precalib/commissioning/aus/caendigi/reproducability/scan_20261101_200616/EM6190-C \
-  --out-dir /disk03/usr8/kanai062/UAP-Shifter/1105/1101-200616-EM6190-C \
+python3 runners/aus_cluster_runner-dat-hk.py \
+  --raw-dir /disk03/hk04/precalib/commissioning/aus/caendigi/reproducability/scan_20261101_2006161/EM6190-C \
+  --out-dir /disk03/usr8/kanai062/UAP-Shifter/1105/1101-200616-EM6190-C_hk_test \
   --template R12860_config_dat.yaml \
-  --queue all \
-  --Nevent 10000 \
-  --elapse "2:00:00" 
+  --channels 0,1,3,7 \
+  --queue hk \
+  --Nevent 100 \
+  --max-points 1 \
+  --elapse "1:00:00"
 ```
 
-60k events version
+PMT2 version : the target PMT channel is 5
 ```
-python3 runners/aus_cluster_runner-dat.py \
-  --raw-dir /disk03/hk04/precalib/commissioning/aus/caendigi/reproducability/scan_20261101_200616/EM6190-C \
-  --out-dir /disk03/usr8/kanai062/UAP-Shifter/1105/1101-200616-EM6190-C \
-  --template R12860_config_dat.yaml \
-  --queue all \
-  --Nevent 600000 \
-  --elapse "2:00:00" 
-```
-
-
-
-PMT2 version : target PMT channel is 5
-```
-python3 runners/aus_cluster_runner-dat.py \
-  --raw-dir /disk03/hk04/precalib/commissioning/aus/caendigi/reproducability/scan_20261101_200616/EM6190-C \
-  --out-dir /disk03/usr8/kanai062/UAP-Shifter/1105/1101-200616-EM6190-C \
-  --template R12860_config-dat-0157.yaml \
-  --channels 0,1,5,7 \
-  --queue all \
-  --Nevent 10000 \
-  --elapse "2:00:00"
-```
-
-
-hk queue version
-```
-unset PYRATE_HOME
-export UAP_ROOT_THISROOT="" 
-```
-
-```
-python3 runners/aus_cluster_runner-dat.py \
+python3 runners/aus_cluster_runner-dat-hk.py \
   --raw-dir /disk03/hk04/precalib/commissioning/aus/caendigi/reproducability/scan_20261030_035344/EM5650-H \
-  --out-dir /disk03/usr8/kanai062/UAP-Shifter/1105/1030-035344-EM5650-H \
-  --template R12860_config-dat-0157.yaml \
+  --out-dir /disk03/usr8/kanai062/UAP-Shifter/1105/1030-035344-EM5650-H_hk_test \
+  --template R12860_config_dat-0157.yaml \
   --channels 0,1,5,7 \
   --queue hk \
   --Nevent 100 \
   --max-points 1 \
-  --elapse "0:10:00"
+  --elapse "1:00:00"
+```
+
+## Whole Job submission to all 
+
+
+PMT1 version : the target PMT channel is 3
+``
+python3 runners/aus_cluster_runner-dat-hk.py \
+  --raw-dir /disk03/hk04/precalib/commissioning/aus/caendigi/reproducability/scan_20261101_2006161/EM6190-C \
+  --out-dir /disk03/usr8/kanai062/UAP-Shifter/1105/1101-200616-EM6190-C_hk_test \
+  --template R12860_config_dat.yaml \
+  --channels 0,1,3,7 \
+  --queue hk \
+  --Nevent 600000 \
+  --elapse "4:00:00"
+```
+
+PMT2 version : the target PMT channel is 5
+``
+python3 runners/aus_cluster_runner-dat-hk.py \
+  --raw-dir /disk03/hk04/precalib/commissioning/aus/caendigi/reproducability/scan_20261030_035344/EM5650-H \
+  --out-dir /disk03/usr8/kanai062/UAP-Shifter/1105/1030-035344-EM5650-H_hk_test_all \
+  --template R12860_config_dat-0157.yaml \
+  --channels 0,1,5,7 \
+  --queue hk \
+  --Nevent 600000 \
+  --elapse "4:00:00"
+```
+
+You can see this log showing all jobs have been submitted successfully just after you run the job submission command. 
+```
+[OK]   theta0_phi0 -> [INFO] PJM 0000 pjsub Job 198813375 submitted.
+[OK]   theta0_phi90 -> [INFO] PJM 0000 pjsub Job 198813376 submitted.
+[OK]   theta0_phi180 -> [INFO] PJM 0000 pjsub Job 198813377 submitted.
+[OK]   theta0_phi270 -> [INFO] PJM 0000 pjsub Job 198813378 submitted.
+[OK]   theta10_phi0 -> [INFO] PJM 0000 pjsub Job 198813379 submitted.
+[OK]   theta10_phi90 -> [INFO] PJM 0000 pjsub Job 198813380 submitted.
+[OK]   theta10_phi180 -> [INFO] PJM 0000 pjsub Job 198813382 submitted.
+[OK]   theta10_phi270 -> [INFO] PJM 0000 pjsub Job 198813383 submitted.
+[OK]   theta20_phi0 -> [INFO] PJM 0000 pjsub Job 198813384 submitted.
+[OK]   theta20_phi90 -> [INFO] PJM 0000 pjsub Job 198813385 submitted.
+[OK]   theta20_phi180 -> [INFO] PJM 0000 pjsub Job 198813386 submitted.
+[OK]   theta20_phi270 -> [INFO] PJM 0000 pjsub Job 198813387 submitted.
+[OK]   theta30_phi0 -> [INFO] PJM 0000 pjsub Job 198813389 submitted.
+[OK]   theta30_phi90 -> [INFO] PJM 0000 pjsub Job 198813390 submitted.
+[OK]   theta30_phi180 -> [INFO] PJM 0000 pjsub Job 198813391 submitted.
+[OK]   theta30_phi270 -> [INFO] PJM 0000 pjsub Job 198813392 submitted.
+[OK]   theta40_phi0 -> [INFO] PJM 0000 pjsub Job 198813393 submitted.
+[OK]   theta40_phi90 -> [INFO] PJM 0000 pjsub Job 198813394 submitted.
+[OK]   theta40_phi180 -> [INFO] PJM 0000 pjsub Job 198813395 submitted.
+[OK]   theta40_phi270 -> [INFO] PJM 0000 pjsub Job 198813397 submitted.
+[OK]   theta50_phi0 -> [INFO] PJM 0000 pjsub Job 198813398 submitted.
+[OK]   theta50_phi90 -> [INFO] PJM 0000 pjsub Job 198813399 submitted.
+[OK]   theta50_phi180 -> [INFO] PJM 0000 pjsub Job 198813400 submitted.
+[OK]   theta50_phi270 -> [INFO] PJM 0000 pjsub Job 198813401 submitted.
+[OK]   theta60_phi0 -> [INFO] PJM 0000 pjsub Job 198813402 submitted.
+[OK]   theta60_phi90 -> [INFO] PJM 0000 pjsub Job 198813403 submitted.
+[OK]   theta60_phi180 -> [INFO] PJM 0000 pjsub Job 198813405 submitted.
+[OK]   theta60_phi270 -> [INFO] PJM 0000 pjsub Job 198813406 submitted.
+[OK]   theta70_phi0 -> [INFO] PJM 0000 pjsub Job 198813407 submitted.
+[OK]   theta70_phi90 -> [INFO] PJM 0000 pjsub Job 198813408 submitted.
+[OK]   theta70_phi180 -> [INFO] PJM 0000 pjsub Job 198813409 submitted.
+[OK]   theta70_phi270 -> [INFO] PJM 0000 pjsub Job 198813410 submitted.
+[OK]   theta80_phi0 -> [INFO] PJM 0000 pjsub Job 198813412 submitted.
+[OK]   theta80_phi90 -> [INFO] PJM 0000 pjsub Job 198813413 submitted.
+[OK]   theta80_phi180 -> [INFO] PJM 0000 pjsub Job 198813414 submitted.
+[OK]   theta80_phi270 -> [INFO] PJM 0000 pjsub Job 198813415 submitted.
 ```
 
 Job status check
