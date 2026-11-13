@@ -1,10 +1,10 @@
 #!/bin/bash
 # =====================================================================
-#  1113-AUSanalysis.sh  –  automatic root2csv + csv2plot for AUS data
+#  1113-AUSUAP-auto.sh  –  automatic root2csv + csv2plot for AUS data
 #  Run on : Shifter PC (precalib@10.200.102.69), next to 1113-AUSjobsubmit.sh
 #
-#  Usage :  ./1113-AUSanalysis.sh [-date YYYYMMDD] [-replot]
-#           ./1113-AUSanalysis.sh status      (show the status from another terminal)
+#  Usage :  ./1113-AUSUAP-auto.sh [-date YYYYMMDD] [-replot]
+#           ./1113-AUSUAP-auto.sh status      (show the status from another terminal)
 #
 #  Input  : SUBMIT_LIST written by 1113-AUSjobsubmit.sh (point + PJM job id)
 #  Every INTERVAL seconds:
@@ -24,7 +24,7 @@
 #       every plot: x = theta, one line per phi (0, 90, 180, 270)
 #    5. waveform 2D plots (time vs signal, all events) for every submitted point
 #       (raw waveN.dat, no need to wait for the job), at most WF_PER_CYCLE per cycle
-#         <PMT>/waveformdist/thetaX_phiY_chN.png      (runners/waveform_2Dplot.py)
+#         <PMT>/waveformdist/thetaX_phiY_chN.png      (runners/AUSwaveform-2Dplot.py)
 #  Analysed points are remembered (ANA_LIST, with the job id) and never redone,
 #  unless the point is submitted again (new job id).
 #
@@ -46,8 +46,8 @@ CHARGE_CFG="${CHARGE_CFG:-aus_root2csv_charge_default}"
 TIME_CFG="${TIME_CFG:-aus_root2csv_emg_default}"
 PMT_CH_CANDIDATES="${PMT_CH_CANDIDATES:-3 5}"   # first one found in the job config = pmt_ch
 SUKAP_RAW_BASE="/disk03/hk04/precalib/production/aus"   # raw: <base>/<elec>/scan_.../<PMT>/wavesave_thetaX_phiY
-WAVEFORM_PY="$UAP_DIR/runners/waveform_2Dplot.py"      # git branch 1107
-WF_OPTS="${WF_OPTS:-}"              # extra options for waveform_2Dplot.py, e.g. "--nevent 100000"
+WAVEFORM_PY="$UAP_DIR/runners/AUSwaveform-2Dplot.py"      # git branch 1107
+WF_OPTS="${WF_OPTS:-}"              # extra options for AUSwaveform-2Dplot.py, e.g. "--nevent 100000"
 WF_PER_CYCLE=${WF_PER_CYCLE:-10}    # waveform points per cycle (root2csv of new points is not delayed)
 
 INTERVAL=${INTERVAL:-300}           # [s] between cycles
@@ -269,7 +269,7 @@ for c in sshpass flock; do
 done
 
 exec 7>"$INSTANCE_LOCK"
-flock -n 7 || { echo "1113-AUSanalysis.sh is already running.  (./1113-AUSanalysis.sh status)"; exit 1; }
+flock -n 7 || { echo "1113-AUSUAP-auto.sh is already running.  (./1113-AUSUAP-auto.sh status)"; exit 1; }
 
 mkdir -p "$LOG_DIR"; touch "$ANA_LIST" "$WF_LIST"; rm -f "$STOP_FILE"
 [ -s "$SUBMIT_LIST" ] || echo "NOTE: $SUBMIT_LIST is empty – has 1113-AUSjobsubmit.sh submitted anything?"
