@@ -340,7 +340,7 @@ python3 runners/aus_cluster_runner-dat.py \
   --Nevent 1000
 ```
 
-60k events version
+60k events version comment : perhaps it does not work in "hk" queue due to "cppyy" absence.
 ```
 python3 runners/aus_cluster_runner-dat.py \
   --raw-dir /disk03/hk04/precalib/commissioning/aus/caendigi/scan_20261014_165159/EL7370-A \
@@ -349,6 +349,8 @@ python3 runners/aus_cluster_runner-dat.py \
   --queue hk \
   --elapse "4:00:00" 
 ```
+
+
 
 Job status check
 ```
