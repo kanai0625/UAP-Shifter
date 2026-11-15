@@ -1,4 +1,5 @@
-__UAP Manual on sukap 1106ver__
+__UAP Manual on sukap 1116ver__
+updates from 1106ver : AUS flow without pyrate (aus_raw2root.py, 4-step charge fit, fixed-threshold timing with a late-pulse EMG, new automation).
 updates from 1105ver : revising the job submission part and environment.
 
 You can see the latest version on `https://github.com/kanai0625/UAP-Shifter.git` branches
@@ -301,156 +302,149 @@ python3 main.py csv2plot \
 
 
 # AUS flow
+(1116ver: pyrate is no longer used for AUS. Everything runs with the conda environment of 0.2.)
 
-## AUS1 : dat2root
-```
-python3 runners/aus_runner-dat.py --raw-dir /disk03/hk04/precalib/commissioning/aus/caendigi/scan_YYYYMMDD_HHMMSS/PMT_label --template R12860_config_dat.yaml --channels 0,1,3,7 --theta 0 10 20 30 40 50 60 70 80 --phi 0 90 180 270 --Nevent 600000 --out-dir /disk03/usr8/kanai0625/UAP-Shifter/aus_outputs/YYYYMMDD_HHMMSS_PMT_label
-```
+FLOW : raw2root (`runners/aus_raw2root.py`, one job per point) → point analysis (`runners/aus_run_point.sh`: charge fit, timing fit, plots, SiPM) → PMT plots (`runners/aus_merge_plot.py`).
+The same commands are used by the automation on the Shifter PC (AUS5).
 
-(full option version)
-```
-python3 runners/aus_runner-dat.py \
-  --raw-dir /disk03/hk04/precalib/commissioning/aus/caendigi/scan_20261014_165159/EL7370-A \
-  --template R12860_config_dat.yaml \
-  --channels 0,1,3,7 \
-  --theta 0 10 20 30 40 50 60 70 80 \
-  --phi 0 90 180 270 \
-  --Nevent 20000 \
-  --out-dir /disk03/usr8/kanai062/UAP-Shifter/aus_outputs/scan_20261014_165159_EL7370-A \
-  --pyrate-cwd /disk03/usr8/schen/workspace/HKPrecal/waveformreader/aus_pyrate/darkmatteraustralia-pyrate-3c2e05d64b61 \
-  --pyrate-cmd $PWD/run_pyrate.sh
-```
-`Nevent(nevent)` is the number of events to be processed. `theta` and `phi` are the angle value to be processed; all possible combinations of `(theta,phi)` are processed.
+## AUS0 : definitions
+| step | definition |
+|---|---|
+| baseline | ch0 (laser trigger): mean of the **last 30** samples; other channels: mean of the **first 40** samples. σ = their standard deviation |
+| waveform | V [mV] = polarity × (ADC − baseline) × 2000/16384 (DT5730S, 14 bit, 2 Vpp); polarity + for ch0/ch1, − for the PMTs (ch3/5/7) |
+| PulseStart (charge) | first sample after the baseline window with V > NSIGMA × σ (NSIGMA = 2.2) |
+| charge | Σ V in [PulseStart − 10, PulseStart + 50) × 2 ns / 50 Ω [pC] |
+| PulseStart (timing) | second ROOT file (`outputs_vcut<V>mV`): PMT events whose largest pulse is above **V = 2.0 mV**; PulseStart = rising edge (first sample above V going back from the maximum). Trigger and SiPM as above |
+| charge fit | 4 steps: 1 pedestal (Gaussian, ±2σ) → 2 SPE start = most populated 0.05 pC bin at ≥ 1 pC, Gaussian in start ± 1 pC → 3 pedestal + SPE + 2PE (SPE kept in start ± 1 pC, no SPE prior) → 4 + backscatter (SPE ± 10 × fit error of step 3). Every fit parameter is written in the legend of the figure |
+| timing fit | Δt = PulseStart(PMT) − PulseStart(ch0); window = peak of the −520..520 ns histogram (2 ns bins) ± 50 ns (PMT, 100 ns), ± 30 ns (SiPM). PMT: prompt EMG (data in peak −10..+6 ns) → late-pulse EMG (data after the prompt) → linear background → all free (extended unbinned NLL). μ and FWHM of the prompt EMG are marked in the figure |
+| results | gain = (μ_SPE − μ_ped)/e (`gain_pedestal_subtracted`); arrival time = μ of the prompt EMG; TTS = FWHM of the prompt EMG (`FWHM_signal`); relative QE = (N_prompt / N_SiPM) relative to θ=0, φ=0; late fraction = N_late / (N_prompt + N_late) |
 
-## AUS2: root2csv charge
+## AUS1 : one point, everything (quick check)
+raw2root + charge + timing + plots + SiPM plots of one point (no job):
 ```
-python3 main.py root2csv --config-name aus_root2csv_charge_default --input-dir /disk03/usr8/kanai062/UAP-Shifter/aus_outputs/scan_20261014_165159_EL7370-A/outputs --serial EL7370-A pmt_ch=3
+runners/aus_run_point.sh \
+  -raw /disk03/hk04/precalib/production/aus/caendigi/scan_20261108_135057/EM5370-B \
+  -point theta0_phi0 -nevent 300000
 ```
-
-## AUS3 : root2csv time
+Output: `aus_point_outputs/scan_20261108_135057_EM5370-B_theta0_phi0_n300000/`
 ```
-python3 main.py root2csv --config-name aus_root2csv_emg_default --input-dir /disk03/usr8/kanai062/UAP-Shifter/aus_outputs/scan_20261014_165159_EL7370-A/outputs --serial EL7370-A pmt_ch=3
+root/ root_vcut2.0mV/   ROOT files (main / fixed 2.0 mV PMT threshold)
+charge/                 csv/aus_charge_results.csv, figures/*_log.png (step 4), *_step2_spe_log.png (step 3)
+time/                   csv/aus_results.csv, figures/theta0_phi0.png (PMT), sipm_theta0_phi0.png
+plots/                  pulsestart_chN.png, delta_t.png, charge_peakheight.png, summary.txt
+sipm/                   sipm_waveforms_grid/overlay.png (100 waveforms), sipm_wfdist_10pct/100pct/vthr100mV.png
+logs/                   raw2root.log, charge.log ([STEP1..4]), time.log ([STEP1..4]), ...
 ```
+Main options (all: `runners/aus_run_point.sh -h`)
 
-## AUS4 : csv2plot
-gain and timing plot vs angle
+| option | meaning | default |
+|---|---|---|
+| `-nevent N` | events of raw2root (0 = all) | 300000 |
+| `-nsigma S` | PulseStart threshold for the charge [σ] | 2.2 |
+| `-vcut V` / `-vcut-edge max\|first` | fixed PMT threshold [mV] for the timing / rising edge of the largest pulse or first crossing | 2.0 / max |
+| `-twin T` / `-sipm-twin T` | timing window width [ns] PMT / SiPM | 100 / 60 |
+| `-prompt-range L,H` | timing step 1: prompt EMG fitted in peak+L..peak+H ns | -10,6 |
+| `-no-late` (`-tbkg const\|linear\|none`) | timing without the late-pulse EMG | – |
+| `-spe-min Q` / `-spe-hw W` / `-spe-bound N` | charge: SPE start ≥ Q pC / window ± W pC / step 4 ± N × error | 1.0 / 1.0 / 10 |
+| `-set KEY=VALUE` | charge config override, e.g. `-set charge_fit_range=[-1,8]` | – |
+| `-root F -vroot F` | use existing ROOT files (e.g. of a job) → no raw2root | – |
+| `-out DIR` | output directory | see above |
+| `-skip-sipm`, `-wf-nevent N`, `-vthr V` | SiPM plots off / events of the distributions (0 = all) / threshold of the 3rd distribution [mV] | – / 0 / 100 |
 
-### AUS4.1 : gain vs angle plot
+## AUS2 : raw2root job submission (one job per point, hk queue)
+PMT channel 3 (wave0,1,3,7):
 ```
-python3 main.py csv2plot --config-name csv2plot_default-aus input_dir=/disk03/usr8/kanai062/UAP-Shifter/outputs/2026-10-30/17-30-03-root2csv-aus-charge/csv
+python3 runners/aus_cluster_runner-raw2root-hk.py \
+  --raw-dir /disk03/hk04/precalib/production/aus/caendigi/scan_YYYYMMDD_HHMMSS/PMT_label \
+  --out-dir /disk03/hk04/precalib/production/aus/processed/scan_YYYYMMDD_HHMMSS/PMT_label \
+  --channels 0,1,3,7 --queue hk --Nevent 300000 --nsigma 2.2 --vcut-mv 2.0 --elapse 1:00:00
 ```
+PMT channel 5 (wave0,1,5,7): `--channels 0,1,5,7`.
+Only some points: `--points theta0_phi0 theta10_phi90`, or `--theta 0 10 --phi 0 90`. Test without submitting: `--dry-run`.
 
-### AUS4.2 : time vs angle plot
-```
-python3 main.py csv2plot --config-name csv2plot_default-aus input_dir=/disk03/usr8/kanai062/UAP-Shifter/outputs/2026-10-30/17-32-34-root2csv-aus/csv
-```
-
-
-
-## AUS job submission of raw2root 
-I recommend to use "hk" queue and "aus_cluster_runner-dat-hk.py" instead of "all" queue.
-Job submission trial to "hk" queue
-
-PMT1 version : the target PMT channel is 3
-```
-python3 runners/aus_cluster_runner-dat-hk.py \
-  --raw-dir /disk03/hk04/precalib/commissioning/aus/caendigi/reproducability/scan_20261101_2006161/EM6190-C \
-  --out-dir /disk03/usr8/kanai062/UAP-Shifter/1105/1101-200616-EM6190-C_hk_test \
-  --template R12860_config_dat.yaml \
-  --channels 0,1,3,7 \
-  --queue hk \
-  --Nevent 100 \
-  --max-points 1 \
-  --elapse "1:00:00"
-```
-
-PMT2 version : the target PMT channel is 5
-```
-python3 runners/aus_cluster_runner-dat-hk.py \
-  --raw-dir /disk03/hk04/precalib/commissioning/aus/caendigi/reproducability/scan_20261030_035344/EM5650-H \
-  --out-dir /disk03/usr8/kanai062/UAP-Shifter/1105/1030-035344-EM5650-H_hk_test \
-  --template R12860_config_dat-0157.yaml \
-  --channels 0,1,5,7 \
-  --queue hk \
-  --Nevent 100 \
-  --max-points 1 \
-  --elapse "1:00:00"
-```
-
-## Whole Job submission to all 
-
-
-PMT1 version : the target PMT channel is 3
-``
-python3 runners/aus_cluster_runner-dat-hk.py \
-  --raw-dir /disk03/hk04/precalib/commissioning/aus/caendigi/reproducability/scan_20261101_2006161/EM6190-C \
-  --out-dir /disk03/usr8/kanai062/UAP-Shifter/1105/1101-200616-EM6190-C_hk_test \
-  --template R12860_config_dat.yaml \
-  --channels 0,1,3,7 \
-  --queue hk \
-  --Nevent 600000 \
-  --elapse "4:00:00"
-```
-
-PMT2 version : the target PMT channel is 5
-``
-python3 runners/aus_cluster_runner-dat-hk.py \
-  --raw-dir /disk03/hk04/precalib/commissioning/aus/caendigi/reproducability/scan_20261030_035344/EM5650-H \
-  --out-dir /disk03/usr8/kanai062/UAP-Shifter/1105/1030-035344-EM5650-H_hk_test_all \
-  --template R12860_config_dat-0157.yaml \
-  --channels 0,1,5,7 \
-  --queue hk \
-  --Nevent 600000 \
-  --elapse "4:00:00"
-```
-
-You can see this log showing all jobs have been submitted successfully just after you run the job submission command. 
+One line per point is printed:
 ```
 [OK]   theta0_phi0 -> [INFO] PJM 0000 pjsub Job 198813375 submitted.
-[OK]   theta0_phi90 -> [INFO] PJM 0000 pjsub Job 198813376 submitted.
-[OK]   theta0_phi180 -> [INFO] PJM 0000 pjsub Job 198813377 submitted.
-[OK]   theta0_phi270 -> [INFO] PJM 0000 pjsub Job 198813378 submitted.
-[OK]   theta10_phi0 -> [INFO] PJM 0000 pjsub Job 198813379 submitted.
-[OK]   theta10_phi90 -> [INFO] PJM 0000 pjsub Job 198813380 submitted.
-[OK]   theta10_phi180 -> [INFO] PJM 0000 pjsub Job 198813382 submitted.
-[OK]   theta10_phi270 -> [INFO] PJM 0000 pjsub Job 198813383 submitted.
-[OK]   theta20_phi0 -> [INFO] PJM 0000 pjsub Job 198813384 submitted.
-[OK]   theta20_phi90 -> [INFO] PJM 0000 pjsub Job 198813385 submitted.
-[OK]   theta20_phi180 -> [INFO] PJM 0000 pjsub Job 198813386 submitted.
-[OK]   theta20_phi270 -> [INFO] PJM 0000 pjsub Job 198813387 submitted.
-[OK]   theta30_phi0 -> [INFO] PJM 0000 pjsub Job 198813389 submitted.
-[OK]   theta30_phi90 -> [INFO] PJM 0000 pjsub Job 198813390 submitted.
-[OK]   theta30_phi180 -> [INFO] PJM 0000 pjsub Job 198813391 submitted.
-[OK]   theta30_phi270 -> [INFO] PJM 0000 pjsub Job 198813392 submitted.
-[OK]   theta40_phi0 -> [INFO] PJM 0000 pjsub Job 198813393 submitted.
-[OK]   theta40_phi90 -> [INFO] PJM 0000 pjsub Job 198813394 submitted.
-[OK]   theta40_phi180 -> [INFO] PJM 0000 pjsub Job 198813395 submitted.
-[OK]   theta40_phi270 -> [INFO] PJM 0000 pjsub Job 198813397 submitted.
-[OK]   theta50_phi0 -> [INFO] PJM 0000 pjsub Job 198813398 submitted.
-[OK]   theta50_phi90 -> [INFO] PJM 0000 pjsub Job 198813399 submitted.
-[OK]   theta50_phi180 -> [INFO] PJM 0000 pjsub Job 198813400 submitted.
-[OK]   theta50_phi270 -> [INFO] PJM 0000 pjsub Job 198813401 submitted.
-[OK]   theta60_phi0 -> [INFO] PJM 0000 pjsub Job 198813402 submitted.
-[OK]   theta60_phi90 -> [INFO] PJM 0000 pjsub Job 198813403 submitted.
-[OK]   theta60_phi180 -> [INFO] PJM 0000 pjsub Job 198813405 submitted.
-[OK]   theta60_phi270 -> [INFO] PJM 0000 pjsub Job 198813406 submitted.
-[OK]   theta70_phi0 -> [INFO] PJM 0000 pjsub Job 198813407 submitted.
-[OK]   theta70_phi90 -> [INFO] PJM 0000 pjsub Job 198813408 submitted.
-[OK]   theta70_phi180 -> [INFO] PJM 0000 pjsub Job 198813409 submitted.
-[OK]   theta70_phi270 -> [INFO] PJM 0000 pjsub Job 198813410 submitted.
-[OK]   theta80_phi0 -> [INFO] PJM 0000 pjsub Job 198813412 submitted.
-[OK]   theta80_phi90 -> [INFO] PJM 0000 pjsub Job 198813413 submitted.
-[OK]   theta80_phi180 -> [INFO] PJM 0000 pjsub Job 198813414 submitted.
-[OK]   theta80_phi270 -> [INFO] PJM 0000 pjsub Job 198813415 submitted.
+```
+Output (`--out-dir`):
+```
+outputs/output_thetaX_phiY.root              main ROOT file (charge)
+outputs_vcut2.0mV/output_thetaX_phiY.root    fixed-threshold ROOT file (timing)
+configs/thetaX_phiY_raw2root.yaml            channels, pmt_ch, nevent, ... of the point
+jobs/job_thetaX_phiY.sh   logs/thetaX_phiY.log   scheduler/thetaX_phiY.out/.err
+```
+Job status: `pjstat` ("RST" running, "QUE" queued, not shown = finished).
+Number of finished points:
+```
+ls -1 /disk03/hk04/precalib/production/aus/processed/scan_YYYYMMDD_HHMMSS/PMT_label/outputs/*.root | wc -l
 ```
 
-Job status check
+## AUS3 : point analysis from the job outputs
 ```
-pjstat
+P=/disk03/hk04/precalib/production/aus/processed/scan_YYYYMMDD_HHMMSS/PMT_label
+R=/disk03/hk04/precalib/production/aus/caendigi/scan_YYYYMMDD_HHMMSS/PMT_label
+pt=theta0_phi0
+runners/aus_run_point.sh -raw $R -point $pt -pmt-ch 5 \
+  -root $P/outputs/output_$pt.root -vroot $P/outputs_vcut2.0mV/output_$pt.root \
+  -out $P/$pt -wf-out $P/waveformdist -wf-prefix ${pt}_
 ```
-"RST" -> running, "QUE" -> quene, no appearence -> finished
+All points of a PMT (one after the other):
+```
+for f in $P/outputs/output_theta*_phi*.root; do
+  pt=$(basename $f .root); pt=${pt#output_}
+  runners/aus_run_point.sh -raw $R -point $pt -pmt-ch 5 -root $f -vroot $P/outputs_vcut2.0mV/output_$pt.root \
+    -out $P/$pt -wf-out $P/waveformdist -wf-prefix ${pt}_ > $P/$pt.log 2>&1
+done
+```
+Single steps (normally not needed; `runners/aus_run_point.sh` calls them):
+```
+python3 runners/aus_root2csv.py --kind charge --root <main ROOT file> --serial PMT_label --pmt-ch 5 --out <dir>/charge
+python3 runners/aus_root2csv.py --kind timing --root <vcut ROOT file> --serial PMT_label --pmt-ch 5 --pmt-twin 100 --out <dir>/time
+python3 runners/aus_point_plots.py --out <dir>/plots --root <main> --vroot <vcut> --pmt-ch 5 \
+  --charge-csv <dir>/charge/csv/aus_charge_results.csv --timing-csv <dir>/time/csv/aus_results.csv
+python3 runners/aus_sipm_waveforms.py --input-dir $R/wavesave_$pt --out-dir <dir>/sipm
+python3 runners/aus_sipm_wfdist.py    --input-dir $R/wavesave_$pt --out-dir <dir>/sipm
+```
 
-Check the number of root files to be exported
+## AUS4 : csv2plot (whole PMT)
+Merges `$P/thetaX_phiY/{charge,time}/csv/*.csv`, recomputes the values relative to θ=0, φ=0 and plots them vs θ (one line per φ):
+
 ```
-ls -1 /disk03/usr8/kanai062/UAP-Shifter/aus_cluster_test/scan_20261014_165159/EL7370-A/outputs/*.root 2>/dev/null | wc -l
+python3 runners/aus_merge_plot.py $P PMT_label
 ```
+| file | content |
+|---|---|
+| `$P/charge/aus_charge_results.csv`, `gain_<PMT>.png`, `relative_gain_<PMT>.png` | gain (pedestal subtracted), relative gain |
+| `$P/time/aus_results.csv`, `relative_QE_<PMT>.png` | relative QE (SiPM normalised) |
+| `$P/time/arrival_time_<PMT>.png`, `TTS_<PMT>.png`, `late_fraction_<PMT>.png` | arrival time (μ), TTS (FWHM of the prompt EMG), late-pulse fraction |
+
+## AUS5 : automation on the Shifter PC
+Run on the Shifter PC (precalib@10.200.102.69) in this order, each in its own terminal (commands: `status | log | quit | help`):
+```
+./1112-AUSbackup.sh          # AUS DAQ -> Shifter -> sukap, every 5 min
+./1113-AUSjobsubmission.sh   # AUS2 for every new point (hk queue, max 100 jobs), every 5 min
+./1113-AUSUAP-auto.sh        # AUS3 + AUS4 + web copy, every 5 min
+```
+* `1113-AUSjobsubmission.sh` : `-date YYYYMMDD` (points written on/after that day), `-elec caendigi|hkelec`, `-dry`.
+  Env: `NEVENT` (300000), `NSIGMA` (2.2), `VCUT` (2.0), `ELAPSE` (1:00:00), `MAX_ACTIVE` (100).
+  Submitted points: `~/precal_transfer_logs/AUSjobs_raw2root_submitted.list` (new name: points of the pyrate era are submitted again).
+* `1113-AUSUAP-auto.sh` : `-date YYYYMMDD`, `-replot`, `-publish`.
+  Env: `VCUT` (2.0, same as the jobs), `POINT_OPTS` (extra options of `aus_run_point.sh`, default `-twin 100`).
+  Analysed points: `~/precal_transfer_logs/AUSana_raw2root_done.list`.
+* Web (`/home/hkpd/public_html/precalib/aus_daily_check/scan_.../<PMT>/`):
+  `charge/` (charge fits + gain, relative gain), `timing/` (timing fits + relative QE, arrival time, TTS, late fraction),
+  `waveformdist/` (waveform 2D plots of every channel + `thetaX_phiY_sipm_*.png`), `plots/` (`thetaX_phiY_delta_t.png`, ...).
+
+## AUS6 : files of the AUS flow (UAP-Shifter 1116)
+| file | role |
+|---|---|
+| `runners/aus_raw2root.py` | WaveDump .dat → ROOT (main + fixed-threshold file) |
+| `runners/aus_cluster_runner-raw2root-hk.py` | raw2root jobs (pjsub, hk queue) |
+| `runners/aus_run_point.sh` | analysis of one point (calls the scripts below) |
+| `runners/aus_root2csv.py` | UAP root2csv engine + the AUS charge / timing fits |
+| `uap/fit/aus_charge_steps.py`, `aus_timing_late.py`, `aus_plot_style.py` | 4-step charge fit, late-pulse timing fit, figures |
+| `runners/aus_point_plots.py`, `aus_sipm_waveforms.py`, `aus_sipm_wfdist.py` | point plots, SiPM plots |
+| `runners/aus_merge_plot.py` | whole-PMT CSVs and plots |
+| `runners/1113-AUSjobsubmission.sh`, `runners/1113-AUSUAP-auto.sh` | automation (Shifter PC) |
+
+The previous pyrate-based commands (`runners/aus_runner-dat.py`, `runners/aus_cluster_runner-dat-hk.py`, `R12860_config_dat*.yaml`) are kept but no longer used by the automation.

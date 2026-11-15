@@ -206,6 +206,16 @@ Channel assignment is derived from the PMT serial order in the filename. The thr
 
 ---
 
+## AUS flow (branch 1116)
+
+AUS no longer uses pyrate: `runners/aus_raw2root.py` (WaveDump .dat -> ROOT, one job per point with
+`runners/aus_cluster_runner-raw2root-hk.py`), `runners/aus_run_point.sh` (charge fit in 4 steps, fixed-threshold
+timing with a late-pulse EMG, plots, SiPM plots of one point) and `runners/aus_merge_plot.py` (whole PMT).
+Fit code: `uap/fit/aus_charge_steps.py`, `uap/fit/aus_timing_late.py`, `uap/fit/aus_plot_style.py`
+(installed on top of the UAP fitters, UAP's own code is unchanged).
+Automation on the Shifter PC: `runners/1113-AUSjobsubmission.sh`, `runners/1113-AUSUAP-auto.sh`.
+Details: `UAP-manual-on-sukap.md` (AUS flow).
+
 ## Quick Start
 
 ### 1) Install environment

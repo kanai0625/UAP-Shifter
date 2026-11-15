@@ -1,30 +1,39 @@
 #!/bin/bash
 # =====================================================================
-#  1113-AUSUAP-auto.sh  –  automatic root2csv + csv2plot for AUS data
-#  Run on : Shifter PC (precalib@10.200.102.69), next to 1113-AUSjobsubmit.sh
+#  1113-AUSUAP-auto.sh  –  automatic AUS point analysis + PMT plots (branch 1116)
+#  Run on : Shifter PC (precalib@10.200.102.69), next to 1113-AUSjobsubmission.sh
 #
-#  Usage :  ./1113-AUSUAP-auto.sh [-date YYYYMMDD] [-replot]
+#  Usage :  ./1113-AUSUAP-auto.sh [-date YYYYMMDD] [-replot] [-publish]
 #           ./1113-AUSUAP-auto.sh status      (show the status from another terminal)
 #
-#  Input  : SUBMIT_LIST written by 1113-AUSjobsubmit.sh (point + PJM job id)
+#  Input  : SUBMIT_LIST written by 1113-AUSjobsubmission.sh (point + PJM job id of aus_raw2root.py)
 #  Every INTERVAL seconds:
 #    1. sukap (hkpd): pjstat -> jobs still queued/running are skipped
 #    2. a point is READY when its job is no longer in pjstat and
 #         processed/scan_.../<PMT>/outputs/output_thetaX_phiY.root
 #       exists and was not modified for ROOT_SETTLE seconds
 #       (job gone but no root file -> [JOBFAIL] in the log)
-#    3. per point (python3 main.py root2csv, same configs as the manual):
-#         <PMT>/thetaX_phiY/charge/  aus_root2csv_charge_default  (csv + charge distribution plot)
-#         <PMT>/thetaX_phiY/time/    aus_root2csv_emg_default     (csv + timing fit plot)
-#       pmt_ch = 3 or 5, taken from the job config (wave0137 / wave0157)
-#    4. per PMT, after new points: merge the point CSVs, recompute the
-#       values relative to theta=0,phi=0, and plot
-#         <PMT>/charge/  aus_charge_results.csv, gain, relative gain
-#         <PMT>/time/    aus_results.csv,        relative QE, arrival time, TTS (FWHM)
-#       every plot: x = theta, one line per phi (0, 90, 180, 270)
+#    3. per point: runners/aus_run_point.sh with the ROOT files of the job (same as the manual)
+#         <PMT>/thetaX_phiY/charge/  4-step charge fit (pedestal -> SPE start >= 1 pC -> SPE+2PE -> backscatter)
+#         <PMT>/thetaX_phiY/time/    timing fit of outputs_vcut<VCUT>mV (fixed PMT threshold VCUT mV):
+#                                    prompt EMG -> late-pulse EMG -> linear background, PMT window 100 ns
+#         <PMT>/thetaX_phiY/plots/   PulseStart / delta t / charge / PeakHeight + summary.txt
+#         <PMT>/waveformdist/thetaX_phiY_sipm_*.png   SiPM waveforms (100) + distributions (10 %/100 %/>100 mV)
+#       pmt_ch = from configs/thetaX_phiY_raw2root.yaml of the job
+#    4. per PMT, after new points: runners/aus_merge_plot.py merges the point CSVs, recomputes the
+#       values relative to theta=0,phi=0, and plots
+#         <PMT>/charge/  aus_charge_results.csv, gain (pedestal subtracted), relative gain
+#         <PMT>/time/    aus_results.csv, relative QE, arrival time, TTS (FWHM of the prompt EMG), late fraction
+#       every plot: x = theta, one line per phi (every phi value in the scan)
 #    5. waveform 2D plots (time vs signal, all events) for every submitted point
 #       (raw waveN.dat, no need to wait for the job), at most WF_PER_CYCLE per cycle
 #         <PMT>/waveformdist/thetaX_phiY_chN.png      (runners/AUSwaveform-2Dplot.py)
+#    6. copy all PNGs of every updated PMT to the web directory (world readable)
+#         WEB_BASE/scan_.../<PMT>/charge/        charge fits of every theta_phi + gain, relative gain
+#         WEB_BASE/scan_.../<PMT>/timing/        timing fits of every theta_phi + relative QE, arrival time, TTS
+#         WEB_BASE/scan_.../<PMT>/waveformdist/  thetaX_phiY_chN.png, thetaX_phiY_sipm_*.png
+#         WEB_BASE/scan_.../<PMT>/plots/         thetaX_phiY_{pulsestart_chN,delta_t,charge_peakheight}.png
+#       (file names unchanged; WEB_BASE = /home/hkpd/public_html/precalib/aus_daily_check)
 #  Analysed points are remembered (ANA_LIST, with the job id) and never redone,
 #  unless the point is submitted again (new job id).
 #
@@ -37,18 +46,20 @@ SUKAP_HOST="10.220.11.100"          # sukap
 SUKAP_PORT="22"
 SUKAP_OUT_BASE="/disk03/hk04/precalib/production/aus/processed"   # <base>/scan_.../<PMT>
 
-UAP_DIR="/disk03/usr8/kanai062/UAP-Shifter"
+UAP_DIR="/disk03/usr8/kanai062/UAP-Shifter"     # branch 1116
 CONDA_SH="$UAP_DIR/miniforge3/etc/profile.d/conda.sh"
 CONDA_ENV="$UAP_DIR/miniforge3/envs/hkprecal-uap"
-PYRATE_HOME="$UAP_DIR/aus_pyrate/darkmatteraustralia-pyrate-3c2e05d64b61"
+POINT_SH="$UAP_DIR/runners/aus_run_point.sh"
+MERGE_PY="$UAP_DIR/runners/aus_merge_plot.py"
 
-CHARGE_CFG="${CHARGE_CFG:-aus_root2csv_charge_default}"
-TIME_CFG="${TIME_CFG:-aus_root2csv_emg_default}"
-PMT_CH_CANDIDATES="${PMT_CH_CANDIDATES:-3 5}"   # first one found in the job config = pmt_ch
+VCUT="${VCUT:-2.0}"                 # fixed PMT threshold [mV] of the timing file (same as 1113-AUSjobsubmission.sh)
+POINT_OPTS="${POINT_OPTS:--twin 100}"   # extra options of runners/aus_run_point.sh (see its -h)
+PMT_CH_CANDIDATES="${PMT_CH_CANDIDATES:-3 5}"   # fallback: first one found in an old pyrate job config
 SUKAP_RAW_BASE="/disk03/hk04/precalib/production/aus"   # raw: <base>/<elec>/scan_.../<PMT>/wavesave_thetaX_phiY
 WAVEFORM_PY="$UAP_DIR/runners/AUSwaveform-2Dplot.py"      # git branch 1107
 WF_OPTS="${WF_OPTS:-}"              # extra options for AUSwaveform-2Dplot.py, e.g. "--nevent 100000"
 WF_PER_CYCLE=${WF_PER_CYCLE:-10}    # waveform points per cycle (root2csv of new points is not delayed)
+WEB_BASE="/home/hkpd/public_html/precalib/aus_daily_check"   # PNG copies: <base>/scan_.../<PMT>/{charge,timing,waveformdist}
 
 INTERVAL=${INTERVAL:-300}           # [s] between cycles
 ROOT_SETTLE=${ROOT_SETTLE:-60}      # [s] root file unchanged for this long (job id known)
@@ -56,13 +67,12 @@ ROOT_SETTLE_NOJOB=${ROOT_SETTLE_NOJOB:-600}  # [s] same, when no job id is known
 MAX_NG=3                            # a point that failed this many times is given up
 
 LOG_DIR="$HOME/precal_transfer_logs"
-SUBMIT_LIST="$LOG_DIR/AUSjobs_submitted.list"   # written by 1113-AUSjobsubmit.sh
-ANA_LIST="$LOG_DIR/AUSana_done.list"            # key<TAB>job id<TAB>date
+SUBMIT_LIST="$LOG_DIR/AUSjobs_raw2root_submitted.list"   # written by 1113-AUSjobsubmission.sh
+ANA_LIST="$LOG_DIR/AUSana_raw2root_done.list"            # key<TAB>job id<TAB>date
 WF_LIST="$LOG_DIR/AUSwave_done.list"            # key<TAB>date   (waveform 2D plots made)
 STATUS_FILE="/tmp/precal_AUSana.status"
 STOP_FILE="/tmp/precal_AUSana.stop"
 INSTANCE_LOCK="/tmp/precal_AUSana.lock"
-REMOTE_TOOL="$SUKAP_OUT_BASE/.uap_auto/aus_merge_plot.py"   # uploaded at start
 
 SSH_CTRL="/tmp/precal-ana-ssh-%r@%h-%p"
 SUKAP_COMMON="-p $SUKAP_PORT -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -o ControlMaster=auto -o ControlPath=$SSH_CTRL -o ControlPersist=600"
@@ -71,12 +81,13 @@ SUKAP_COMMON="-p $SUKAP_PORT -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o
 sbash() { sshpass -e ssh $SUKAP_COMMON "$SUKAP_USER@$SUKAP_HOST" 'bash -s' 7>&-; }
 usage() {
     cat <<EOF
-Usage:  $0 [-date YYYYMMDD] [-replot]
+Usage:  $0 [-date YYYYMMDD] [-replot] [-publish]
         $0 status
   -date YYYYMMDD   only scans scan_YYYYMMDD_* on/after this date (default: all submitted points)
-  -replot          remake merged CSVs + plots for every PMT once at start
+  -replot          remake merged CSVs + plots for every PMT once at start (and copy them to the web dir)
+  -publish         copy the PNGs of every analysed PMT to the web dir once at start
   status           print the status of the running analysis
-Env overrides: CHARGE_CFG TIME_CFG PMT_CH_CANDIDATES WF_OPTS WF_PER_CYCLE INTERVAL ROOT_SETTLE
+Env overrides: VCUT POINT_OPTS PMT_CH_CANDIDATES WF_OPTS WF_PER_CYCLE INTERVAL ROOT_SETTLE
 EOF
 }
 
@@ -86,160 +97,9 @@ remote_env() {
 set +u
 source '$CONDA_SH' && conda activate '$CONDA_ENV' || { echo 'REMOTE_ERR:conda'; exit; }
 export UAP_HOME='$UAP_DIR'
-export PYRATE_HOME='$PYRATE_HOME'
-export UAP_ROOT_THISROOT='$CONDA_ENV/bin/thisroot.sh'
-export PYTHONPATH='$UAP_DIR':'$PYRATE_HOME':\${PYTHONPATH:-}
-export LD_LIBRARY_PATH='$CONDA_ENV/lib':'$CONDA_ENV/lib/root':\${LD_LIBRARY_PATH:-}
+export PYTHONPATH='$UAP_DIR':\${PYTHONPATH:-}
 export MPLBACKEND=Agg
 EOF
-}
-
-# python: merge point CSVs of one PMT, recompute relative values, plot
-merge_plot_py() {
-    cat <<'PY'
-#!/usr/bin/env python3
-"""Merge AUS per-point CSVs of one PMT, recompute relative columns, make plots."""
-import logging
-import sys
-from argparse import Namespace
-from pathlib import Path
-
-import numpy as np
-import pandas as pd
-
-from uap.fit import common_math as cm
-import uap.engine.csv2plot as c2p
-
-logging.basicConfig(level=logging.INFO, format="[%(asctime)s][merge_plot][%(levelname)s] %(message)s")
-log = logging.getLogger("merge_plot")
-
-pmt_dir = Path(sys.argv[1])
-serial = sys.argv[2]
-PHIS = (0, 90, 180, 270)
-COLORS = ("C0", "C1", "C2", "C3")
-MARKERS = ("o", "s", "^", "D")
-
-
-def load(sub, name):
-    dfs = []
-    for f in sorted(pmt_dir.glob("theta*_phi*/{}/csv/{}".format(sub, name))):
-        try:
-            dfs.append(pd.read_csv(f))
-        except Exception as exc:
-            log.warning("cannot read %s: %s", f, exc)
-    if not dfs:
-        return None
-    df = pd.concat(dfs, ignore_index=True)
-    df = df.sort_values(["phi", "theta"]).drop_duplicates(["phi", "theta"], keep="last")
-    return df.reset_index(drop=True)
-
-
-def center(df):
-    c = df[(df["theta"] == 0) & (df["phi"] == 0)]
-    return None if c.empty else c.iloc[0]
-
-
-def rel(df, col, err, c, out, out_err):
-    df[out] = np.nan
-    df[out_err] = np.nan
-    if c is None or col not in df.columns:
-        return
-    v0 = float(c.get(col, np.nan))
-    e0 = float(c.get(err, np.nan)) if err in df.columns else np.nan
-    df[out] = cm.safe_ratio(df[col].values, v0, logger=log)
-    if err in df.columns:
-        df[out_err] = cm.safe_ratio_err(df[col].values, df[err].values, v0, e0, logger=log)
-
-
-def plot(out_dir, csv, y_col, yerr_col, y_label, what, out_name, hline):
-    df = pd.read_csv(csv)
-    if y_col not in df.columns or not pd.to_numeric(df[y_col], errors="coerce").notna().any():
-        log.warning("skip %s: no values in column %s", out_name, y_col)
-        return
-    base = dict(system="aus", csv=str(csv), phi_col="phi", theta_col="theta",
-                y_col=y_col, yerr_col=yerr_col, mode="single_phi",
-                flip_sign=False, use_abs_theta=False, use_hamamatsu_angle=False,
-                line_style="-", line_width=1.5, marker_size=4.8)
-    phis = pd.to_numeric(df["phi"], errors="coerce")
-    lines = {}
-    for i, phi in enumerate(PHIS):
-        if not (phis == phi).any():
-            continue
-        lines["phi{}".format(phi)] = dict(base, label="phi = {} deg".format(phi), phi=phi,
-                                          line_color=COLORS[i], marker=MARKERS[i])
-    if not lines:
-        log.warning("skip %s: no points at phi %s", out_name, PHIS)
-        return
-    args = Namespace(out_dir=str(out_dir), out_base="",
-                     x_label="theta (deg)", y_label=y_label,
-                     title="{}  {}  ({})".format(serial, what, pmt_dir.parent.name),
-                     x_min=None, x_max=None, y_min=None, y_max=None, hline=hline,
-                     out_name=out_name, points_csv=out_name.replace(".png", "_points.csv"),
-                     lines=lines, line_order=list(lines))
-    try:
-        c2p.run(args)
-        log.info("plot -> %s", Path(out_dir) / out_name)
-    except (SystemExit, Exception) as exc:
-        log.warning("plot %s failed: %s", out_name, exc)
-
-
-ok = True
-# ---- charge: gain, relative gain
-dfc = load("charge", "aus_charge_results.csv")
-if dfc is not None:
-    c = center(dfc)
-    if c is None:
-        log.warning("charge: theta0_phi0 not analysed yet -> relative gain is NaN")
-    rel(dfc, "gain", "gain_err", c, "relative_gain", "relative_gain_err")
-    out = pmt_dir / "charge"
-    out.mkdir(parents=True, exist_ok=True)
-    csv = out / "aus_charge_results.csv"
-    dfc.to_csv(csv, index=False)
-    log.info("charge: %d point(s) -> %s", len(dfc), csv)
-    plot(out, csv, "gain", "gain_err", "Gain", "Gain", "gain_{}.png".format(serial), None)
-    plot(out, csv, "relative_gain", "relative_gain_err", "Relative gain", "Relative gain",
-         "relative_gain_{}.png".format(serial), 1.0)
-else:
-    log.info("charge: no point CSV yet")
-
-# ---- time: relative QE (relative_de), TTS (FWHM)
-dft = load("time", "aus_results.csv")
-if dft is not None:
-    c = center(dft)
-    if c is None:
-        log.warning("time: theta0_phi0 not analysed yet -> relative QE is NaN")
-    rel(dft, "sig_yield", "sig_err", c, "rel_yield", "rel_yield_err")
-    use_sipm = "sipm_sig_yield" in dft.columns and pd.to_numeric(dft["sipm_sig_yield"], errors="coerce").notna().any()
-    if use_sipm:
-        rel(dft, "sipm_sig_yield", "sipm_sig_err", c, "rel_sipm_yield", "rel_sipm_yield_err")
-        dft["_ratio"] = cm.safe_ratio(dft["sig_yield"].values, dft["sipm_sig_yield"].values, logger=log)
-        dft["_ratio_err"] = cm.safe_ratio_err(dft["sig_yield"].values, dft["sig_err"].values,
-                                              dft["sipm_sig_yield"].values, dft["sipm_sig_err"].values, logger=log)
-        c2 = None if c is None else dft[(dft["theta"] == 0) & (dft["phi"] == 0)].iloc[0]
-        rel(dft, "_ratio", "_ratio_err", c2, "relative_norm", "relative_norm_err")
-        dft = dft.drop(columns=["_ratio", "_ratio_err"])
-        dft["relative_de"] = dft["relative_norm"]
-        dft["relative_de_err"] = dft["relative_norm_err"]
-    else:
-        dft["relative_norm"] = np.nan
-        dft["relative_norm_err"] = np.nan
-        dft["relative_de"] = dft["rel_yield"]
-        dft["relative_de_err"] = dft["rel_yield_err"]
-    out = pmt_dir / "time"
-    out.mkdir(parents=True, exist_ok=True)
-    csv = out / "aus_results.csv"
-    dft.to_csv(csv, index=False)
-    log.info("time: %d point(s) -> %s  (SiPM normalised: %s)", len(dft), csv, use_sipm)
-    plot(out, csv, "relative_de", "relative_de_err",
-         "Relative QE" + (" (SiPM normalized)" if use_sipm else ""), "Relative QE",
-         "relative_QE_{}.png".format(serial), 1.0)
-    plot(out, csv, "mu", "mu_err", "Arrival time (ns)  [PMT - laser trigger, EMG mu]", "Arrival time",
-         "arrival_time_{}.png".format(serial), None)
-    plot(out, csv, "FWHM", "", "TTS FWHM (ns)", "TTS (FWHM of the timing fit)", "TTS_{}.png".format(serial), None)
-else:
-    log.info("time: no point CSV yet")
-print("MERGE_PLOT_DONE")
-PY
 }
 
 # ============================ Arguments ==============================
@@ -248,11 +108,12 @@ if [ "$1" = "status" ]; then
     else echo "AUS analysis is not running."; fi
     exit 0
 fi
-DATE_OPT=""; REPLOT=0
+DATE_OPT=""; REPLOT=0; PUBLISH=0
 while [ $# -gt 0 ]; do
     case "$1" in
         -date|--date) DATE_OPT="$2"; shift 2 ;;
         -replot|--replot) REPLOT=1; shift ;;
+        -publish|--publish) PUBLISH=1; shift ;;
         -h|--help|help) usage; exit 0 ;;
         *) echo "Unknown option: $1"; usage; exit 1 ;;
     esac
@@ -272,7 +133,7 @@ exec 7>"$INSTANCE_LOCK"
 flock -n 7 || { echo "1113-AUSUAP-auto.sh is already running.  (./1113-AUSUAP-auto.sh status)"; exit 1; }
 
 mkdir -p "$LOG_DIR"; touch "$ANA_LIST" "$WF_LIST"; rm -f "$STOP_FILE"
-[ -s "$SUBMIT_LIST" ] || echo "NOTE: $SUBMIT_LIST is empty – has 1113-AUSjobsubmit.sh submitted anything?"
+[ -s "$SUBMIT_LIST" ] || echo "NOTE: $SUBMIT_LIST is empty – has 1113-AUSjobsubmission.sh submitted anything?"
 
 read -rsp "Password for $SUKAP_USER@$SUKAP_HOST (sukap): " SUKAP_PASS; echo
 export SSHPASS="$SUKAP_PASS"
@@ -281,11 +142,13 @@ sshpass -e ssh $SUKAP_COMMON -O check "$SUKAP_USER@$SUKAP_HOST" &>/dev/null \
 
 echo "Checking the environment on sukap as $SUKAP_USER ..."
 CHK=$( { remote_env; cat <<EOF
-for f in '$UAP_DIR/main.py' '$UAP_DIR/config/$CHARGE_CFG.yaml' '$UAP_DIR/config/$TIME_CFG.yaml' '$WAVEFORM_PY'; do
-    [ -r "\$f" ] || echo "NG: cannot read \$f"
+for f in '$POINT_SH' '$MERGE_PY' '$UAP_DIR/runners/aus_root2csv.py' '$UAP_DIR/uap/fit/aus_timing_late.py' \
+         '$UAP_DIR/config/aus_root2csv_charge_default.yaml' '$UAP_DIR/config/aus_root2csv_emg_default.yaml' '$WAVEFORM_PY'; do
+    [ -r "\$f" ] || echo "NG: cannot read \$f  (UAP-Shifter branch 1116?)"
 done
-python3 -c 'import ROOT, hydra, omegaconf, uproot, pandas, matplotlib, uap.engine.csv2plot, uap.engine.root2csv' 2>&1 | tail -2 | sed 's/^/NG: python: /'
-mkdir -p '$(dirname "$REMOTE_TOOL")' 2>/dev/null && [ -w '$(dirname "$REMOTE_TOOL")' ] || echo "NG: cannot write $(dirname "$REMOTE_TOOL")"
+python3 -c 'import uproot, iminuit, scipy, yaml, pandas, matplotlib, uap.engine.csv2plot, uap.engine.root2csv' 2>&1 | tail -2 | sed 's/^/NG: python: /'
+mkdir -p '$SUKAP_OUT_BASE' 2>/dev/null && [ -w '$SUKAP_OUT_BASE' ] || echo "NG: cannot write $SUKAP_OUT_BASE"
+mkdir -p '$WEB_BASE' 2>/dev/null && [ -w '$WEB_BASE' ] && chmod a+rx '$WEB_BASE' 2>/dev/null || echo "NG: cannot write $WEB_BASE"
 echo CHECK_END
 EOF
 } | sbash 2>&1)
@@ -295,9 +158,6 @@ fi
 if grep -q '^NG:' <<< "$CHK"; then
     echo "ERROR: environment problem on sukap:"; grep '^NG:' <<< "$CHK" | sed 's/^/  /'; exit 1
 fi
-# upload the merge/plot tool
-merge_plot_py | sshpass -e ssh $SUKAP_COMMON "$SUKAP_USER@$SUKAP_HOST" "cat > '$REMOTE_TOOL'" 7>&- \
-    || { echo "ERROR: cannot upload $REMOTE_TOOL"; exit 1; }
 
 LOG_FILE="$LOG_DIR/AUSana_$(date +%Y%m%d_%H%M%S).log"
 log() { echo "[$(date '+%F %T')] $*" >> "$LOG_FILE"; }
@@ -306,20 +166,21 @@ log() { echo "[$(date '+%F %T')] $*" >> "$LOG_FILE"; }
     echo "Started  : $(date '+%Y-%m-%d %H:%M:%S')"
     echo "Input    : $SUBMIT_LIST  (scans >= $MIN_DATE)"
     echo "Base     : sukap:$SUKAP_OUT_BASE/scan_.../<PMT>"
-    echo "Configs  : $CHARGE_CFG / $TIME_CFG   pmt_ch from {$PMT_CH_CANDIDATES}"
+    echo "Point    : runners/aus_run_point.sh  -vcut $VCUT $POINT_OPTS"
+    echo "Web      : sukap:$WEB_BASE/scan_.../<PMT>/{charge,timing,waveformdist,plots}"
     echo "------------------------------------------------------------"
 } > "$LOG_FILE"
 
 # ============================ Worker =================================
 worker() {
-    declare -A ANA NGCNT GIVEUP FAILED WF WNG
+    declare -A ANA NGCNT GIVEUP FAILED WF WNG PUBQ
     local k j rest
     while IFS=$'\t' read -r k j rest; do [ -n "$k" ] && ANA[$k]="$j"; done < "$ANA_LIST"
     while IFS=$'\t' read -r k rest; do [ -n "$k" ] && WF[$k]=1; done < "$WF_LIST"
 
     ST_STATE="idle"; ST_LAST="-"; ST_NEXT="-"; ST_CUR=""
     ST_RUNNING=0; ST_READY=0; ST_WAITROOT=0; N_DONE=0; N_NG=0; N_PLOT=0; N_FAIL=0
-    ST_WFLEFT=0; N_WF=0; N_WFNG=0
+    ST_WFLEFT=0; N_WF=0; N_WFNG=0; N_PUB=0
 
     write_status() {
         {
@@ -331,6 +192,7 @@ worker() {
             echo "Points    : job queued/running $ST_RUNNING   root not settled $ST_WAITROOT   ready $ST_READY"
             echo "Totals    : analysed $N_DONE   NG $N_NG   job failed (no root) $N_FAIL   PMT plots made $N_PLOT"
             echo "Waveform  : done $N_WF   NG $N_WFNG   left $ST_WFLEFT   (max $WF_PER_CYCLE per cycle)"
+            echo "Web copy  : $N_PUB PMT update(s)  -> $WEB_BASE"
             echo "Last cycle: $ST_LAST      Next cycle : $ST_NEXT"
             echo "Log       : $LOG_FILE"
             echo "Recent    :"
@@ -339,31 +201,31 @@ worker() {
         } > "$STATUS_FILE.tmp" && mv -f "$STATUS_FILE.tmp" "$STATUS_FILE"
     }
 
-    # $1 scan  $2 pmt  $3 point  -> prints POINT_OK / POINT_NG:<msg>
+    # $1 elec  $2 scan  $3 pmt  $4 point  -> prints POINT_OK / POINT_NG:<msg>
     analyse_point() {
-        local scan=$1 pmt=$2 pt=$3
-        local pd="$SUKAP_OUT_BASE/$scan/$pmt"
+        local elec=$1 scan=$2 pmt=$3 pt=$4
+        local pd="$SUKAP_OUT_BASE/$scan/$pmt" raw="$SUKAP_RAW_BASE/$1/$2/$3"
         { remote_env; cat <<EOF
-pd='$pd'; pt='$pt'; root="\$pd/outputs/output_\$pt.root"
+pd='$pd'; pt='$pt'; root="\$pd/outputs/output_\$pt.root"; vroot="\$pd/outputs_vcut${VCUT}mV/output_\$pt.root"
 [ -s "\$root" ] || { echo "POINT_NG:root file missing"; exit; }
-pch=""
-cfg=\$(ls "\$pd"/configs/*_\${pt}_dat.yaml 2>/dev/null | head -1)
-for c in $PMT_CH_CANDIDATES; do
-    [ -n "\$cfg" ] && grep -qE "^[[:space:]]*ch\$c:" "\$cfg" && { pch=\$c; break; }
-done
-[ -n "\$pch" ] || { echo "POINT_NG:cannot find pmt channel ($PMT_CH_CANDIDATES) in \${cfg:-configs/*_\${pt}_dat.yaml}"; exit; }
-mkdir -p "\$pd/\$pt" && cd "\$pd/\$pt" || { echo "POINT_NG:cannot create \$pd/\$pt"; exit; }
-rm -rf charge time
-python3 '$UAP_DIR/main.py' root2csv --config-name '$CHARGE_CFG' --input-dir "\$root" --serial '$pmt' \
-    pmt_ch=\$pch hydra.run.dir="\$pd/\$pt/charge" > charge.log 2>&1
-rc1=\$?
-python3 '$UAP_DIR/main.py' root2csv --config-name '$TIME_CFG' --input-dir "\$root" --serial '$pmt' \
-    pmt_ch=\$pch hydra.run.dir="\$pd/\$pt/time" > time.log 2>&1
-rc2=\$?
-msg=""
-[ -s charge/csv/aus_charge_results.csv ] || msg="charge (rc=\$rc1): \$(tail -1 charge.log)"
-[ -s time/csv/aus_results.csv ]          || msg="\${msg:+\$msg | }time (rc=\$rc2): \$(tail -1 time.log)"
-if [ -z "\$msg" ]; then echo "POINT_OK:pmt_ch=\$pch"; else echo "POINT_NG:\$msg"; fi
+pch=\$(awk '/^pmt_ch:/ {print \$2}' "\$pd/configs/\${pt}_raw2root.yaml" 2>/dev/null)
+if [ -z "\$pch" ]; then                     # old pyrate job config
+    cfg=\$(ls "\$pd"/configs/*_\${pt}_dat.yaml 2>/dev/null | head -1)
+    for c in $PMT_CH_CANDIDATES; do
+        [ -n "\$cfg" ] && grep -qE "^[[:space:]]*ch\$c:" "\$cfg" && { pch=\$c; break; }
+    done
+fi
+[ -n "\$pch" ] || { echo "POINT_NG:cannot find the pmt channel (configs/\${pt}_raw2root.yaml)"; exit; }
+mkdir -p "\$pd/\$pt" "\$pd/waveformdist" || { echo "POINT_NG:cannot create \$pd/\$pt"; exit; }
+rm -rf "\$pd/\$pt/charge" "\$pd/\$pt/time" "\$pd/\$pt/time_nsigma" "\$pd/\$pt/plots"
+bash '$POINT_SH' -no-conda -raw '$raw' -point "\$pt" -serial '$pmt' -pmt-ch "\$pch" \
+    -root "\$root" -vroot "\$vroot" -vcut '$VCUT' -out "\$pd/\$pt" \
+    -wf-out "\$pd/waveformdist" -wf-prefix "\${pt}_" $POINT_OPTS > "\$pd/\$pt.log" 2>&1
+if grep -q '^AUS_POINT_OK' "\$pd/\$pt.log"; then
+    echo "POINT_OK:pmt_ch=\$pch\$( [ -s "\$vroot" ] || echo ', no vcut file: timing from the main ROOT file')"
+else
+    echo "POINT_NG:\$(grep -E 'FAILED|missing|errors' "\$pd/\$pt.log" | head -2 | tr '\n' ' ') (see \$pd/\$pt.log)"
+fi
 EOF
         } | sbash 2>&1 | grep -E '^(POINT_|REMOTE_ERR)' | tail -1
     }
@@ -404,7 +266,7 @@ EOF
             ST_CUR="$sc/$pm/$pt  (all channels, all events)"; write_status
             r=$(waveform_point "$e" "$sc" "$pm" "$pt")
             if [[ "$r" == WF_OK* ]]; then
-                WF[$key]=1; N_WF=$(( N_WF + 1 ))
+                WF[$key]=1; N_WF=$(( N_WF + 1 )); PUBQ[$sc/$pm]=1
                 printf '%s\t%s\n' "$key" "$(date '+%F %T')" >> "$WF_LIST"
                 log "[WAVE]    $key  -> waveformdist/${pt}_ch*.png (${r#WF_OK:} ch)"
             else
@@ -416,10 +278,46 @@ EOF
         ST_CUR=""
     }
 
+    # copy all PNGs of one PMT to the web dir; $1 scan  $2 pmt  -> PUB_OK:<n> / PUB_NG:<msg>
+    publish_pmt() {
+        local pd="$SUKAP_OUT_BASE/$1/$2" w="$WEB_BASE/$1/$2"
+        sbash 2>&1 <<EOF | grep -E '^PUB_' | tail -1
+shopt -s nullglob globstar
+mkdir -p '$w/charge' '$w/timing' '$w/waveformdist' '$w/plots' || { echo 'PUB_NG:cannot create $w'; exit; }
+n=0
+cp_png() { local dst=\$1; shift; local f; for f in "\$@"; do [ -f "\$f" ] && cp -pu "\$f" "\$dst/" && n=\$((n+1)); done; }
+cp_png '$w/charge'       '$pd'/theta*_phi*/charge/figures/**/*.png '$pd'/charge/*.png
+cp_png '$w/timing'       '$pd'/theta*_phi*/time/figures/**/*.png   '$pd'/time/*.png
+cp_png '$w/waveformdist' '$pd'/waveformdist/*.png
+mkdir -p '$w/plots'
+for d in '$pd'/theta*_phi*/plots; do      # per-point plots: same names in every point -> point prefix
+    p=\$(basename "\$(dirname "\$d")")
+    for f in "\$d"/*.png; do [ -f "\$f" ] && cp -pu "\$f" '$w/plots/'"\${p}_\$(basename "\$f")" && n=\$((n+1)); done
+done
+chmod -R a+rX '$WEB_BASE/$1' 2>/dev/null
+echo "PUB_OK:\$n"
+EOF
+    }
+
+    publish_pending() {
+        local sp r
+        for sp in "${!PUBQ[@]}"; do
+            [ -f "$STOP_FILE" ] && break
+            ST_STATE="copying PNGs to the web dir  $sp"; ST_CUR=""; write_status
+            r=$(publish_pmt "${sp%%/*}" "${sp#*/}")
+            if [[ "$r" == PUB_OK* ]]; then
+                N_PUB=$(( N_PUB + 1 )); unset 'PUBQ[$sp]'
+                log "[WEB]     $sp  -> aus_daily_check/$sp/{charge,timing,waveformdist,plots}  (${r#PUB_OK:} png)"
+            else
+                log "[WEB NG]  $sp – ${r#PUB_NG:}"; unset 'PUBQ[$sp]'
+            fi
+        done
+    }
+
     # $1 scan  $2 pmt
     merge_plot() {
         local pd="$SUKAP_OUT_BASE/$1/$2"
-        { remote_env; echo "python3 '$REMOTE_TOOL' '$pd' '$2' > '$pd/merge_plot.log' 2>&1; tail -1 '$pd/merge_plot.log'"; } \
+        { remote_env; echo "python3 '$MERGE_PY' '$pd' '$2' > '$pd/merge_plot.log' 2>&1; tail -1 '$pd/merge_plot.log'"; } \
             | sbash 2>&1 | tail -1
     }
 
@@ -428,7 +326,7 @@ EOF
         NGCNT[$1]=$(( ${NGCNT[$1]:-0} + 1 ))
         log "[NG]      $1 – $3   (attempt ${NGCNT[$1]}/$MAX_NG)"
         if (( ${NGCNT[$1]} >= MAX_NG )); then
-            GIVEUP[$1]="$2"; log "[GAVE UP] $1 – failed $MAX_NG times (see <PMT>/thetaX_phiY/charge.log, time.log)"
+            GIVEUP[$1]="$2"; log "[GAVE UP] $1 – failed $MAX_NG times (see <PMT>/thetaX_phiY.log and <PMT>/thetaX_phiY/logs/)"
         fi
     }
 
@@ -437,7 +335,7 @@ EOF
         ST_STATE="plotting  $sp"; ST_CUR=""; write_status
         r=$(merge_plot "${sp%%/*}" "${sp#*/}")
         if [ "$r" = "MERGE_PLOT_DONE" ]; then
-            N_PLOT=$(( N_PLOT + 1 )); log "[PLOT]    $sp  -> charge/ time/ updated"
+            N_PLOT=$(( N_PLOT + 1 )); PUBQ[$sp]=1; log "[PLOT]    $sp  -> charge/ time/ updated"
         else
             log "[PLOT NG] $sp – ${r:-no output}  (see <PMT>/merge_plot.log)"
         fi
@@ -524,8 +422,8 @@ EOS
                 do_merge_plot "$prev"; unset 'DIRTY[$prev]'
             fi
             prev=$sp
-            ST_STATE="root2csv  ($i/${#READY[@]})"; ST_CUR="$sp/$pt  (charge + time fit)"; write_status
-            r=$(analyse_point "$scan" "$pmt" "$pt")
+            ST_STATE="point analysis  ($i/${#READY[@]})"; ST_CUR="$sp/$pt  (charge + timing fit + plots + SiPM)"; write_status
+            r=$(analyse_point "${key%%/*}" "$scan" "$pmt" "$pt")
             if [[ "$r" == POINT_OK* ]]; then
                 ANA[$key]=${JOB[$key]}; unset 'NGCNT[$key]'
                 printf '%s\t%s\t%s\n' "$key" "${JOB[$key]}" "$(date '+%F %T')" >> "$ANA_LIST"
@@ -545,12 +443,22 @@ EOS
         log "[REPLOT]  ${#PM[@]} PMT(s)"
         for k in "${!PM[@]}"; do [ -f "$STOP_FILE" ] && break; do_merge_plot "$k"; done
     fi
+    if (( PUBLISH )); then
+        for k in "${!ANA[@]}" "${!WF[@]}"; do
+            [[ "$k" =~ ^[^/]+/(scan_([0-9]{8})_[0-9]{6}/[^/]+)/ ]] || continue
+            [[ "${BASH_REMATCH[2]}" < "$MIN_DATE" ]] && continue
+            PUBQ[${BASH_REMATCH[1]}]=1
+        done
+        log "[PUBLISH] ${#PUBQ[@]} PMT(s)"
+    fi
+    (( ${#PUBQ[@]} )) && publish_pending
 
     log "[START]   watching $SUBMIT_LIST"
     while [ ! -f "$STOP_FILE" ]; do
         local cstart; cstart=$(date +%s)
         cycle_once
         [ -f "$STOP_FILE" ] || waveform_stage
+        [ -f "$STOP_FILE" ] || publish_pending
         ST_STATE="idle"
         while [ ! -f "$STOP_FILE" ]; do
             local next=$(( cstart + INTERVAL ))
@@ -581,9 +489,10 @@ cat <<EOF
 
 AUS analysis started  (PID $WPID)
   input  : $SUBMIT_LIST  (scans >= $MIN_DATE)
-  point  : sukap:$SUKAP_OUT_BASE/scan_.../<PMT>/thetaX_phiY/{charge,time}/
+  point  : sukap:$SUKAP_OUT_BASE/scan_.../<PMT>/thetaX_phiY/{charge,time,plots}/   (aus_run_point.sh -vcut $VCUT $POINT_OPTS)
   plots  : sukap:$SUKAP_OUT_BASE/scan_.../<PMT>/{charge,time}/
   wave   : sukap:$SUKAP_OUT_BASE/scan_.../<PMT>/waveformdist/   (max $WF_PER_CYCLE points per cycle)
+  web    : sukap:$WEB_BASE/scan_.../<PMT>/{charge,timing,waveformdist,plots}
   cycle  : every $((INTERVAL/60)) min
   log    : $LOG_FILE
 Commands:  status | log | quit | help

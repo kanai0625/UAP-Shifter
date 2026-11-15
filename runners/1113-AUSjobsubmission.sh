@@ -1,10 +1,11 @@
 #!/bin/bash
 # =====================================================================
-#  1113-AUSjobsubmit.sh  –  automatic pyrate job submission for AUS data
+#  1113-AUSjobsubmission.sh  –  automatic raw2root job submission for AUS data
+#                               (runners/aus_raw2root.py, no pyrate; branch 1116)
 #  Run on : Shifter PC (precalib@10.200.102.69), next to 1112-AUSbackup.sh
 #
-#  Usage :  ./1113-AUSjobsubmit.sh [-date YYYYMMDD] [-elec caendigi|hkelec] [-dry]
-#           ./1113-AUSjobsubmit.sh status      (show the status from another terminal)
+#  Usage :  ./1113-AUSjobsubmission.sh [-date YYYYMMDD] [-elec caendigi|hkelec] [-dry]
+#           ./1113-AUSjobsubmission.sh status      (show the status from another terminal)
 #
 #  Input  : DONE_LIST written by 1112-AUSbackup.sh
 #           (= files already rsynced DAQ -> Shifter -> sukap AND zombie-checked)
@@ -12,17 +13,21 @@
 #    1. read DONE_LIST, group the files by point
 #         scan_YYYYMMDD_HHMMSS/<PMT>/wavesave_thetaX_phiY/waveN.dat
 #    2. a point is READY when
-#         - the channel set of exactly one PROFILE is in DONE_LIST
-#             wave0,1,3,7.dat -> R12860_config_dat.yaml
-#             wave0,1,5,7.dat -> R12860_config_dat-0157.yaml
-#           (both sets present = ambiguous -> not submitted, see log), and
+#         - the channel set of one PROFILE is in DONE_LIST
+#             wave0,1,3,7.dat -> PMT ch3        wave0,1,5,7.dat -> PMT ch5
+#           (several sets present, e.g. wave0,1,3,5,7 of a dark-rate scan
+#            -> the FIRST profile in PROFILES is used = 0137, logged as [MULTI]), and
 #         - the DAQ has moved on to another point of the same scan/PMT,
 #           or the newest file of the point is older than SETTLE seconds
 #    3. log in to sukap as hkpd, count the active jobs (pjstat),
 #       and submit at most (MAX_ACTIVE - active) READY points with
-#         runners/aus_cluster_runner-dat-hk.py --points thetaX_phiY ...
+#         runners/aus_cluster_runner-raw2root-hk.py --points thetaX_phiY ...
+#       one job per point = runners/aus_raw2root.py (NEVENT events,
+#         PulseStart NSIGMA sigma + fixed PMT threshold VCUT mV for the timing)
 #       raw : SUKAP_RAW_BASE/<elec>/scan_.../<PMT>
-#       out : SUKAP_OUT_BASE/scan_.../<PMT>
+#       out : SUKAP_OUT_BASE/scan_.../<PMT>/outputs/output_thetaX_phiY.root
+#             SUKAP_OUT_BASE/scan_.../<PMT>/outputs_vcut<VCUT>mV/output_thetaX_phiY.root
+#             SUKAP_OUT_BASE/scan_.../<PMT>/configs/thetaX_phiY_raw2root.yaml  (channels, pmt_ch)
 #  Submitted points are remembered (SUBMIT_LIST) and never submitted again,
 #  unless the backup re-transferred one of their files (size/mtime changed).
 #
@@ -37,19 +42,20 @@ SUKAP_RAW_BASE="/disk03/hk04/precalib/production/aus"   # raw : <base>/<elec>/sc
 SUKAP_OUT_BASE="/disk03/hk04/precalib/production/aus/processed"   # out : <base>/scan_.../<PMT>
 ELEC="caendigi"                     # default, change with -elec
 
-# UAP-Shifter on sukap (hkpd must be able to READ these)
+# UAP-Shifter on sukap (hkpd must be able to READ these; branch 1116)
 UAP_DIR="/disk03/usr8/kanai062/UAP-Shifter"
 CONDA_SH="$UAP_DIR/miniforge3/etc/profile.d/conda.sh"
 CONDA_ENV="$UAP_DIR/miniforge3/envs/hkprecal-uap"
-PYRATE_HOME="$UAP_DIR/aus_pyrate/darkmatteraustralia-pyrate-3c2e05d64b61"
-RUNNER="runners/aus_cluster_runner-dat-hk.py"
+RUNNER="runners/aus_cluster_runner-raw2root-hk.py"
 
 # job parameters (same as the manual command)
-# channel set -> template, chosen automatically per point from the transferred waveN.dat
-PROFILES="${PROFILES:-0,1,3,7:R12860_config_dat.yaml 0,1,5,7:R12860_config_dat-0157.yaml}"
+# channel sets, chosen automatically per point from the transferred waveN.dat (PMT = ch3 / ch5)
+PROFILES="${PROFILES:-0,1,3,7 0,1,5,7}"
 QUEUE="hk"
 NEVENT="${NEVENT:-300000}"
-ELAPSE="${ELAPSE:-2:00:00}"
+NSIGMA="${NSIGMA:-2.2}"             # PulseStart threshold [baseline sigma] (charge)
+VCUT="${VCUT:-2.0}"                 # fixed PMT threshold [mV] for the timing file (0 = off)
+ELAPSE="${ELAPSE:-1:00:00}"
 MAX_ACTIVE=${MAX_ACTIVE:-100}       # hk queue limit for hkpd (all hkpd jobs are counted)
 
 INTERVAL=${INTERVAL:-300}           # [s] between submission cycles
@@ -58,7 +64,8 @@ MAX_NG=3                            # a point that failed this many times is giv
 
 LOG_DIR="$HOME/precal_transfer_logs"
 DONE_LIST="$LOG_DIR/AUSbackup_done.list"        # written by 1112-AUSbackup.sh
-SUBMIT_LIST="$LOG_DIR/AUSjobs_submitted.list"   # elec/scan/PMT/thetaX_phiY<TAB>signature<TAB>job id<TAB>date
+SUBMIT_LIST="$LOG_DIR/AUSjobs_raw2root_submitted.list"   # elec/scan/PMT/thetaX_phiY<TAB>signature<TAB>job id<TAB>date
+                                                # (new name: points of the pyrate era are submitted again)
 STATUS_FILE="/tmp/precal_AUSjobs.status"
 STOP_FILE="/tmp/precal_AUSjobs.stop"
 INSTANCE_LOCK="/tmp/precal_AUSjobs.lock"
@@ -78,7 +85,7 @@ Usage:  $0 [-date YYYYMMDD] [-elec caendigi|hkelec] [-dry]
   -elec NAME       electronics directory (default: $ELEC)
   -dry             make configs/job scripts on sukap but do not pjsub (runner --dry-run)
   status           print the status of the running submitter
-Env overrides: PROFILES NEVENT ELAPSE MAX_ACTIVE INTERVAL SETTLE
+Env overrides: PROFILES NEVENT NSIGMA VCUT ELAPSE MAX_ACTIVE INTERVAL SETTLE
 EOF
 }
 
@@ -109,8 +116,10 @@ SINCE_STR=$(date -d "@$SINCE" '+%Y-%m-%d %H:%M:%S')
 RAW_DIR="$SUKAP_RAW_BASE/$ELEC"
 PROF_CH=(); PROF_TPL=()
 for p in $PROFILES; do
-    [[ "$p" =~ ^[0-9]+(,[0-9]+)*:[^:]+$ ]] || { echo "bad PROFILES entry '$p' (expected 0,1,3,7:template.yaml)"; exit 1; }
-    PROF_CH+=("${p%%:*}"); PROF_TPL+=("${p#*:}")
+    p=${p%%:*}                                           # old "0,1,3,7:template.yaml" entries: template ignored
+    [[ "$p" =~ ^[0-9]+(,[0-9]+)*$ ]] || { echo "bad PROFILES entry '$p' (expected 0,1,3,7)"; exit 1; }
+    pc=""; for c in ${p//,/ }; do case $c in 3|5|7) pc=${pc:-$c} ;; esac; done
+    PROF_CH+=("$p"); PROF_TPL+=("PMT ch${pc:-?}")
 done
 PROF_STR=$(for i in "${!PROF_CH[@]}"; do printf 'wave{%s} -> %s   ' "${PROF_CH[$i]}" "${PROF_TPL[$i]}"; done)
 
@@ -119,7 +128,7 @@ for c in sshpass flock; do
 done
 
 exec 7>"$INSTANCE_LOCK"
-flock -n 7 || { echo "1113-AUSjobsubmit.sh is already running.  (./1113-AUSjobsubmit.sh status)"; exit 1; }
+flock -n 7 || { echo "1113-AUSjobsubmission.sh is already running.  (./1113-AUSjobsubmission.sh status)"; exit 1; }
 
 # ============================ Connection / environment check =========
 mkdir -p "$LOG_DIR"; touch "$DONE_LIST" "$SUBMIT_LIST"; rm -f "$STOP_FILE"
@@ -133,12 +142,11 @@ sshpass -e ssh $SUKAP_COMMON -O check "$SUKAP_USER@$SUKAP_HOST" &>/dev/null \
 echo "Checking the environment on sukap as $SUKAP_USER ..."
 CHK=$(sbash 2>&1 <<EOF
 for c in pjsub pjstat; do command -v \$c >/dev/null || echo "NG: \$c not in PATH"; done
-[ -r '$UAP_DIR/$RUNNER' ]           || echo "NG: cannot read $UAP_DIR/$RUNNER"
-for t in ${PROF_TPL[*]}; do [ -r "$UAP_DIR/\$t" ] || echo "NG: cannot read $UAP_DIR/\$t"; done
+[ -r '$UAP_DIR/$RUNNER' ]           || echo "NG: cannot read $UAP_DIR/$RUNNER (UAP-Shifter branch 1116?)"
+[ -r '$UAP_DIR/runners/aus_raw2root.py' ] || echo "NG: cannot read $UAP_DIR/runners/aus_raw2root.py"
 [ -r '$CONDA_SH' ]                  || echo "NG: cannot read $CONDA_SH"
 [ -x '$CONDA_ENV/bin/python3' ]     || echo "NG: cannot run $CONDA_ENV/bin/python3"
-[ -r '$PYRATE_HOME' ]               || echo "NG: cannot read $PYRATE_HOME"
-[ -r '$CONDA_ENV/bin/thisroot.sh' ] || echo "NG: cannot read $CONDA_ENV/bin/thisroot.sh"
+'$CONDA_ENV/bin/python3' -c 'import numpy, uproot' 2>/dev/null || echo "NG: numpy / uproot missing in $CONDA_ENV"
 mkdir -p '$SUKAP_OUT_BASE' 2>/dev/null && [ -w '$SUKAP_OUT_BASE' ] || echo "NG: cannot write $SUKAP_OUT_BASE"
 echo CHECK_END
 EOF
@@ -159,13 +167,13 @@ log() { echo "[$(date '+%F %T')] $*" >> "$LOG_FILE"; }
     echo "Raw      : sukap:$RAW_DIR/scan_.../<PMT>"
     echo "Output   : sukap:$SUKAP_OUT_BASE/scan_.../<PMT>"
     echo "Profiles : $PROF_STR"
-    echo "Job      : queue=$QUEUE  Nevent=$NEVENT  elapse=$ELAPSE  max=$MAX_ACTIVE$( [ $DRY = 1 ] && echo '  (DRY RUN)')"
+    echo "Job      : runners/aus_raw2root.py  queue=$QUEUE  Nevent=$NEVENT  nsigma=$NSIGMA  vcut=${VCUT}mV  elapse=$ELAPSE  max=$MAX_ACTIVE$( [ $DRY = 1 ] && echo '  (DRY RUN)')"
     echo "------------------------------------------------------------"
 } > "$LOG_FILE"
 
 # ============================ Worker =================================
 worker() {
-    declare -A SUBMITTED NGCNT GIVEUP AMBIG
+    declare -A SUBMITTED NGCNT GIVEUP MULTI
     local k sig rest
     while IFS=$'\t' read -r k sig rest; do [ -n "$k" ] && SUBMITTED[$k]="$sig"; done < "$SUBMIT_LIST"
 
@@ -197,7 +205,7 @@ echo "$out" | awk '$1 ~ /^[0-9]+(\[[0-9]+\])?$/' | wc -l
 EOF
     }
 
-    # $1 scan  $2 pmt  $3 template  $4 channels  $5.. points (thetaX_phiY) -> runner output
+    # $1 scan  $2 pmt  $3 (label, unused)  $4 channels  $5.. points (thetaX_phiY) -> runner output
     submit_points() {
         local scan=$1 pmt=$2 tpl=$3 chs=$4; shift 4
         local dry=""; [ $DRY = 1 ] && dry="--dry-run"
@@ -205,22 +213,19 @@ EOF
         sbash 2>&1 <<EOF
 set +u
 source '$CONDA_SH' && conda activate '$CONDA_ENV' || { echo 'RUNNER_EXIT:conda'; exit; }
-export PYRATE_HOME='$PYRATE_HOME'
 export UAP_HOME='$UAP_DIR'
-export UAP_ROOT_THISROOT='$CONDA_ENV/bin/thisroot.sh'   # job scripts source it (same as the manual)
-export KOR_NTP_HOME='$UAP_DIR/kor_ntp'
-export PYTHONPATH='$PYRATE_HOME':\${PYTHONPATH:-}
-export LD_LIBRARY_PATH='$CONDA_ENV/lib':'$CONDA_ENV/lib/root':\${LD_LIBRARY_PATH:-}
+export PYTHONPATH='$UAP_DIR':\${PYTHONPATH:-}
 # pjsub needs a current directory that hkpd can write to -> run from the output directory
 mkdir -p '$out' && cd '$out' || { echo 'RUNNER_EXIT:cd'; exit; }
 python3 '$UAP_DIR/$RUNNER' \\
   --raw-dir '$RAW_DIR/$scan/$pmt' \\
   --out-dir '$out' \\
   --scheduler-log-dir '$out/scheduler' \\
-  --template '$UAP_DIR/$tpl' \\
   --channels '$chs' \\
   --queue '$QUEUE' \\
   --Nevent '$NEVENT' \\
+  --nsigma '$NSIGMA' \\
+  --vcut-mv '$VCUT' \\
   --elapse '$ELAPSE' \\
   --max-active-jobs '$MAX_ACTIVE' \\
   --poll-seconds 30 $dry \\
@@ -270,13 +275,14 @@ EOF
                 for c in ${PROF_CH[$i]//,/ }; do [ -n "${CHMT[$pk/$c]}" ] || { ok=0; break; }; done
                 (( ok )) && match+=("$i")
             done
-            if (( ${#match[@]} == 1 )); then
-                i=${match[0]}; sig="${PROF_CH[$i]}"
+            if (( ${#match[@]} >= 1 )); then
+                i=${match[0]}; sig="${PROF_CH[$i]}"       # several matches -> first profile (0137)
                 for c in ${PROF_CH[$i]//,/ }; do sig+=",${CHMT[$pk/$c]}"; done
                 PSIG[$pk]=$sig; PPROF[$pk]=$i
-            elif (( ${#match[@]} > 1 )) && [ -z "${AMBIG[$ELEC/$pk]}" ]; then
-                AMBIG[$ELEC/$pk]=1
-                log "[AMBIG]   $ELEC/$pk – files for several profiles (wave $(echo ${PCH[$pk]} | tr ' ' ',')) -> not submitted, submit by hand"
+                if (( ${#match[@]} > 1 )) && [ -z "${MULTI[$ELEC/$pk]}" ]; then
+                    MULTI[$ELEC/$pk]=1
+                    log "[MULTI]   $ELEC/$pk – wave $(echo ${PCH[$pk]} | tr ' ' ',') -> using wave{${PROF_CH[$i]}} / ${PROF_TPL[$i]}"
+                fi
             fi
         done
 
@@ -383,7 +389,7 @@ AUS job submitter started  (PID $WPID)
   raw    : sukap:$RAW_DIR/scan_.../<PMT>
   output : sukap:$SUKAP_OUT_BASE/scan_.../<PMT>
   profile: $PROF_STR
-  job    : queue=$QUEUE  Nevent=$NEVENT  elapse=$ELAPSE  (max $MAX_ACTIVE active)
+  job    : runners/aus_raw2root.py  queue=$QUEUE  Nevent=$NEVENT  nsigma=$NSIGMA  vcut=${VCUT}mV  elapse=$ELAPSE  (max $MAX_ACTIVE active)
   cycle  : every $((INTERVAL/60)) min
   log    : $LOG_FILE
 Commands:  status | log | jobs | quit | help
