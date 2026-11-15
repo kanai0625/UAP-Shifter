@@ -1,144 +1,129 @@
-# HKPrecal UAP
+# HKPrecal UAP  (branch 1116)
 
-HKPrecal UAP is the unified analysis pipeline for PMT pre-calibration.
+HKPrecal UAP is the unified analysis pipeline for the PMT pre-calibration (AUS and KOR stands).
 
-The full pre-calibration workflow is:
-1. `raw -> root` (waveform processing, done by runners calling pyrate/KOR macro)
-2. `root -> csv` (relative quantity calculation)
-3. `csv -> plot` (plotting)
+The workflow is:
+1. `raw -> root`  waveform processing
+   - AUS: `runners/aus_raw2root.py` (WaveDump `.dat`, **no pyrate** since 1116)
+   - KOR: KOR NTP macros (`runners/kor_*runner*.py`)
+2. `root -> csv`  charge (gain) and timing fits per angle point (`uap/`)
+3. `csv -> plot`  values vs angle
 
-This README focuses on step 2 and step 3, and on how the `uap/` package is organized.
+On sukap the repository lives in `/disk03/usr8/kanai062/UAP-Shifter` (default branch on GitHub: `1116`).
+Step-by-step commands: `UAP-manual-on-sukap.md` / `.pdf`.
+
+## What is new in 1116 (AUS)
+
+| step | 1107 (pyrate) | 1116 |
+|---|---|---|
+| raw → root | pyrate + `R12860_config_dat*.yaml` | `runners/aus_raw2root.py`: ch0 pedestal = last 30 samples, others first 40; PulseStart = first sample > 2.2 σ; charge = Σ(V − baseline) in [PS − 10, PS + 50) × 2 ns / 50 Ω (DT5730S); second ROOT file with a fixed PMT threshold (2.0 mV, rising edge of the largest pulse) for the timing |
+| jobs | `aus_cluster_runner-dat-hk.py` | `aus_cluster_runner-raw2root-hk.py` (same options and output lines) |
+| charge fit | one step | 4 steps: pedestal → SPE start (most populated 0.05 pC bin ≥ 1 pC, Gaussian in ± 1 pC) → pedestal + SPE + 2PE → + backscatter; every parameter in the figure legend |
+| timing fit | EMG + linear background, 2.2 σ PulseStart | fixed-threshold PulseStart, PMT window 100 ns: prompt EMG → late-pulse EMG → linear background → all free (unbinned); μ and FWHM marked in the figure |
+| per point | `main.py root2csv` (charge, time) | `runners/aus_run_point.sh` (charge, timing, plots, SiPM waveforms / distributions) |
+| whole PMT | csv2plot | `runners/aus_merge_plot.py`: gain (pedestal subtracted), relative gain, relative QE (SiPM normalised), arrival time, TTS (FWHM of the prompt EMG), late-pulse fraction |
+
+The AUS fit code (`uap/fit/aus_*.py`) is installed on top of the UAP fitters at run time;
+the UAP modules themselves (`charge_spectrum_fit.py`, `emg_timing_offset_fit.py`, ...) are unchanged, so KOR is not affected.
+The pyrate-based AUS runners are kept (legacy) but not used by the automation.
 
 ## Project Structure
 
 ```text
-hkprecal-uap/
-  main.py
+UAP-Shifter/
+  main.py                      Hydra entry (root2csv / csv2plot), used for KOR and the legacy AUS flow
+  env.sh  install_hkprecal_env.sh  requirements.txt
+  UAP-manual-on-sukap.md/.pdf  step-by-step manual (KOR + AUS)
   config/
-    aus_root2csv_emg_default.yaml
-    kor_root2csv_emg_default.yaml
-    csv2plot_default.yaml
+    aus_root2csv_charge_default.yaml   aus_root2csv_emg_default.yaml      (AUS fit settings)
+    kor_root2csv_*.yaml  charge_default.yaml  timing_default.yaml  csv2plot_default*.yaml
   runners/
-    aus_cluster_runner.py
-    kor_cluster_runner.py
+    aus_raw2root.py                    AUS  .dat -> ROOT
+    aus_cluster_runner-raw2root-hk.py  AUS  raw2root jobs (pjsub, hk queue)
+    aus_run_point.sh                   AUS  analysis of one point (calls the scripts below)
+    aus_root2csv.py                    AUS  UAP root2csv engine + AUS charge / timing fits
+    aus_point_plots.py                 AUS  PulseStart / delta t / charge / PeakHeight of one point
+    aus_sipm_waveforms.py  aus_sipm_wfdist.py   AUS  SiPM waveforms (100) / waveform distributions
+    aus_merge_plot.py                  AUS  whole-PMT CSVs and plots vs angle
+    AUSwaveform-2Dplot.py              AUS  waveform 2D plots of every channel
+    1112-AUSbackup.sh  1113-AUSjobsubmission.sh  1113-AUSUAP-auto.sh   automation (run on the Shifter PC)
+    kor_*runner*.py                    KOR  raw -> root
+    aus_runner*.py  aus_cluster_runner*.py (except raw2root)   AUS legacy (pyrate)
   uap/
-    engine/
-      root2csv.py
-      csv2plot.py
-    fit/
-      fitter_interface.py
-      emg_timing_offset_fit.py
-      common_math.py
-      plot_utils.py
-    scan_reader/
-      aus_reader.py
-      kor_reader.py
-    tool/
-      root_io.py
-      scan_prepare.py
-      window.py
-      draw.py
+    engine/      root2csv.py  csv2plot.py
+    fit/         fitter_interface.py  charge_spectrum_fit.py  emg_timing_offset_fit.py
+                 kor_relative_qe_fit.py  fit_config.py  common_math.py  plot_utils.py
+                 aus_charge_steps.py  aus_timing_late.py  aus_plot_style.py     (AUS, 1116)
+    scan_reader/ aus_reader.py  kor_reader.py
+    tool/        root_io.py  scan_prepare.py  window.py  draw.py
 ```
 
 ## Architecture (uap/)
 
-### 1) `uap.engine`: Pipeline entry
-- `root2csv.py`:
-  - Builds fitter
-  - Resolves output layout (`csv/` + `figures/`)
-  - Runs fit pipeline and writes logs/CSV
-- `csv2plot.py`:
-  - Loads line configs from Hydra YAML
-  - Builds each line from CSV + angle selection rule
-  - Produces one figure + optional selected points CSV
+### 1) `uap.engine`: pipeline entry
+- `root2csv.py`: builds the fitter, resolves the output layout (`csv/` + `figures/`), runs the fits, writes logs / CSV
+- `csv2plot.py`: loads line configs, builds each line from CSV + angle selection rule, produces one figure (+ selected points CSV)
 
-### 2) `uap.fit`: Fit pipeline + method implementation
-- `fitter_interface.py`:
-  - Defines common scan workflow (`BaseScanFitter`)
-  - Uniform point format, fit execution loop, status logging, CSV writing
-  - Method-independent orchestration
-- `emg_timing_offset_fit.py`:
-  - Method-specific logic (NumPy/SciPy EMG model, iminuit likelihood fit)
-  - AUS/KOR input preparation
-  - Relative quantity postprocessing
+### 2) `uap.fit`: fit pipeline + methods
+- `fitter_interface.py`: common scan workflow (`BaseScanFitter`), point format, fit loop, status logging, CSV writing
+- `charge_spectrum_fit.py`: charge spectrum (pedestal, SPE, 2PE, backscatter), gain, resolution, P/V
+- `emg_timing_offset_fit.py`: EMG timing fit (+ linear background), AUS SiPM auxiliary fit, relative quantities
+- `common_math.py`: extended unbinned NLL, iminuit wrapper, errors, fit quality
+- AUS (1116):
+  - `aus_charge_steps.py`: 4-step charge fit (and the previous 3-step version)
+  - `aus_timing_late.py`: PMT timing = prompt EMG + late-pulse EMG + linear background, fitted in this order, then all free
+  - `aus_plot_style.py`: charge figure with every fit parameter in the legend; timing figure with data per 2 ns sample,
+    continuous model, μ / FWHM marked; timing background options (linear / const / none)
 
-### 3) `uap.scan_reader`: Data-source parsing/reading rules
-- `aus_reader.py`:
-  - Parse `output_theta*_phi*.root`
-  - AUS branch read helpers and channel resolution
-- `kor_reader.py`:
-  - Parse KOR serial/angle info from `prd_*.root` filename
-  - KOR branch read helpers and auto channel mapping
+### 3) `uap.scan_reader`: data-source parsing
+- `aus_reader.py`: `output_theta*_phi*.root`, AUS branches and channel resolution
+- `kor_reader.py`: KOR serial / angle from the `prd_*.root` file name, branch helpers, channel mapping
 
-### 4) `uap.tool`: Shared utilities
-- `root_io.py`: common ROOT branch readers
-- `window.py`: window selection
-- `scan_prepare.py`: shared point/row/stat builders
-- `draw.py`: CSV point selection + line construction + plotting + Hamamatsu angle transform
-
-## Core Data Flow
-
-### A) `root2csv` flow
-1. Engine creates fitter.
-2. Fitter `prepare_scan(system, args)` builds a list of fit points.
-3. Shared analyzer runs main fit (and optional aux fit such as AUS SiPM) for each point.
-4. Postprocess computes relative columns.
-5. Output CSV is written, and per-point fit diagnostic PNGs go to `figures/`.
-
-### B) `csv2plot` flow
-1. Load `lines` from Hydra config.
-2. For each line:
-   - load CSV
-   - select/transform angle points (e.g. `phi_pair`, `single_phi`, `angle_pairs`)
-   - optional conversion to Hamamatsu angle
-3. Overlay all lines into one figure.
+### 4) `uap.tool`: shared utilities
+- `root_io.py` ROOT branch readers, `window.py` window selection, `scan_prepare.py` point / row builders,
+  `draw.py` CSV point selection + plotting + Hamamatsu angle transform
 
 ## Data File Structures
 
 ### AUS System
 
-#### Raw files: `wave0_theta{θ}_phi{φ}.txt`
+#### Raw files: `scan_YYYYMMDD_HHMMSS/<PMT>/wavesave_theta{θ}_phi{φ}/wave{N}.dat`
 
-CAEN digitizer wavedump format. One file per angle point. Each event is a fixed-length block:
+CAEN DT5730S (14 bit, 2 Vpp, 500 MS/s), WaveDump binary, one file per channel and angle point.
+Each event = 24-byte header (6 × uint32, the first word = event size in bytes) + 260 × uint16 ADC samples (520 ns).
 
-```
-Record Length: 260
-BoardID: 31
-Channel: 0
-Event Number: 0
-Pattern: 0x0000
-Trigger Time Stamp: 59443
-DC offset (DAC): 0xBFFF
-4009       ← ADC sample 0
-4001       ← ADC sample 1
-...        ← 260 × 14-bit ADC values total
-```
+| channel | role | polarity |
+|---|---|---|
+| ch0 | laser trigger | + |
+| ch1 | SiPM (normalisation) | + |
+| ch3 or ch5 | PMT under test (`wave0,1,3,7` or `wave0,1,5,7`) | − |
+| ch7 | (recorded, not analysed) | − |
 
-#### Processed ROOT files: `output_theta{θ}_phi{φ}.root`
+#### Processed ROOT files (`runners/aus_raw2root.py`)
 
-Produced by Pyrate from the raw `.txt` files. One file per angle point. Contains three TTrees (one per digitizer channel), each with ~600k entries:
+`outputs/output_theta{θ}_phi{φ}.root` (main) and `outputs_vcut{V}mV/output_theta{θ}_phi{φ}.root`
+(PMT trees with the fixed threshold V, other trees identical). One TTree `Tree_CH{N}` per channel, one entry per event:
 
-| Tree | Role |
-|------|------|
-| `Tree_CH0` | Trigger (laser reference) |
-| `Tree_CH1` | SiPM (normalization reference) |
-| `Tree_CH2` | PMT under test |
+| Branch | Unit | Description |
+|---|---|---|
+| `PulseStart` | samples (× 2 ns) | first sample above the threshold (NaN: none); vcut file: rising edge of the largest pulse above V |
+| `PulseStartInterp` | samples | the same crossing, linearly interpolated between samples |
+| `PeakHeight`, `PeakLocation` | mV, samples | maximum of the baseline-subtracted waveform in [PS − 10, PS + 50) |
+| `PulseCharge` | pC | Σ V in [PS − 10, PS + 50) × 2 ns / 50 Ω |
+| `Baseline`, `BaselineMV`, `BaselineStdDev` | ADC, mV, mV | pedestal mean / σ (ch0: last 30 samples, others: first 40) |
+| `Threshold` | mV | threshold above the baseline (NSIGMA × σ, or V) |
+| `WindowStart`, `WindowStop` | samples | charge / peak window |
 
-Branches (same layout on all three trees):
+Timing observable: `Δt = (PulseStart(PMT) − PulseStart(ch0)) × 2 ns`, SiPM likewise.
 
-| Branch | dtype | Description |
-|--------|-------|-------------|
-| `PulseStart` | float64 | Pulse leading-edge time (samples). Multiply by 2 ns/sample to get ns. |
-| `PulseCharge` | float64 | Integrated charge (ADC·sample units) |
-| `PeakHeight` | float64 | Waveform peak amplitude (ADC units) |
-| `PeakLocation` | float64 | Sample index of the peak |
-| `CFDPulseStart` | float64 | Constant-fraction discriminator timing (samples) |
-| `LEDTimes` | object (variable-length array) | LED pulse times |
+#### Analysis output (`runners/aus_run_point.sh`, automation: `processed/scan_.../<PMT>/`)
 
-The analysis uses `PulseStart` only. The timing observable is:
-```
-delta_PMT  = Tree_CH2.PulseStart − Tree_CH0.PulseStart   (× 2 ns/sample)
-delta_SiPM = Tree_CH1.PulseStart − Tree_CH0.PulseStart   (× 2 ns/sample)
+```text
+<PMT>/thetaX_phiY/charge/   csv/aus_charge_results.csv, figures/ (final fit, step-3 fit)
+<PMT>/thetaX_phiY/time/     csv/aus_results.csv (incl. late_* , FWHM_signal), figures/ (PMT, SiPM)
+<PMT>/thetaX_phiY/plots/    pulsestart_chN.png, delta_t.png, charge_peakheight.png, summary.txt
+<PMT>/waveformdist/         thetaX_phiY_chN.png, thetaX_phiY_sipm_*.png
+<PMT>/charge/  <PMT>/time/  merged CSVs and plots vs angle
 ```
 
 ---
@@ -206,36 +191,45 @@ Channel assignment is derived from the PMT serial order in the filename. The thr
 
 ---
 
-## AUS flow (branch 1116)
+## Quick Start (sukap)
 
-AUS no longer uses pyrate: `runners/aus_raw2root.py` (WaveDump .dat -> ROOT, one job per point with
-`runners/aus_cluster_runner-raw2root-hk.py`), `runners/aus_run_point.sh` (charge fit in 4 steps, fixed-threshold
-timing with a late-pulse EMG, plots, SiPM plots of one point) and `runners/aus_merge_plot.py` (whole PMT).
-Fit code: `uap/fit/aus_charge_steps.py`, `uap/fit/aus_timing_late.py`, `uap/fit/aus_plot_style.py`
-(installed on top of the UAP fitters, UAP's own code is unchanged).
-Automation on the Shifter PC: `runners/1113-AUSjobsubmission.sh`, `runners/1113-AUSUAP-auto.sh`.
-Details: `UAP-manual-on-sukap.md` (AUS flow).
-
-## Quick Start
-
-### 1) Install environment
+### 1) Environment
 ```bash
-bash install_hkprecal_env.sh
-source env.sh
+cd /disk03/usr8/kanai062/UAP-Shifter
+source miniforge3/etc/profile.d/conda.sh
+conda activate /disk03/usr8/kanai062/UAP-Shifter/miniforge3/envs/hkprecal-uap
+export UAP_HOME=$PWD PYTHONPATH=$PWD:$PYTHONPATH
 ```
-### 2)Raw -> ROOT (runners/)
-The `runners/` scripts submit jobs to the cluster. Keep this layer separate from `uap/` analysis. `--Nevent` is the maximum number of events if no `--Nevent` option txt2root conversion is applied for all recorded events. `--theta` and `--phi` are also options to extract specific  angle combinations. If you run `aus_runner-1028-opt.py` without angle options all angle configurations are processed. 
+(new installation: `bash install_hkprecal_env.sh; source env.sh`)
 
-Typical usage:
+### 2) AUS
+One point, everything (raw2root + charge + timing + plots + SiPM):
 ```bash
-python3 runners/aus_cluster_runner.py --raw-dir /path/to/aus/raw --out-dir /path/to/aus/root --max-active-jobs 100
+runners/aus_run_point.sh -raw /disk03/hk04/precalib/production/aus/caendigi/scan_20261108_135057/EM5370-B \
+                         -point theta0_phi0 -nevent 300000          # options: runners/aus_run_point.sh -h
+```
+Whole PMT: raw2root jobs, then every point, then the plots vs angle:
+```bash
+P=/disk03/hk04/precalib/production/aus/processed/scan_20261108_135057/EM5370-B
+R=/disk03/hk04/precalib/production/aus/caendigi/scan_20261108_135057/EM5370-B
+python3 runners/aus_cluster_runner-raw2root-hk.py --raw-dir $R --out-dir $P --channels 0,1,5,7 \
+        --queue hk --Nevent 300000 --nsigma 2.2 --vcut-mv 2.0 --elapse 1:00:00
+# after the jobs (pjstat):
+for f in $P/outputs/output_theta*_phi*.root; do
+  pt=$(basename $f .root); pt=${pt#output_}
+  runners/aus_run_point.sh -raw $R -point $pt -pmt-ch 5 -root $f -vroot $P/outputs_vcut2.0mV/output_$pt.root \
+      -out $P/$pt -wf-out $P/waveformdist -wf-prefix ${pt}_ > $P/$pt.log 2>&1
+done
+python3 runners/aus_merge_plot.py $P EM5370-B
+```
+
+### 3) KOR: raw -> ROOT (runners/)
+```bash
 python3 runners/kor_cluster_runner.py --raw-dir /path/to/kor/raw --out-dir /path/to/kor/root --max-active-jobs 100
-python3 runners/aus_runner-1028.py --raw-dir /media/precalib/rawdata/aus/commissioning/txt --template ./my_R12860_config.yaml --out-dir /media/precalib/rawdata/aus/UAP-out --channels 0,1,3,7 --Nevent 10000 --theta 10 20 --phi 0 90
 ```
 
-### 3) ROOT -> CSV (Hydra mode)
+### 4) KOR: ROOT -> CSV (Hydra mode)
 ```bash
-python3 main.py root2csv --config-name aus_root2csv_emg_default
 python3 main.py root2csv --config-name kor_root2csv_emg_default
 ```
 
@@ -264,10 +258,24 @@ sections: `fit.model`, `fit.constraints`, `fit.statistic`, `fit.optimizer`.
 For example, append `fit.constraints.weights=free` to release the Poisson weights,
 or `fit.model.backscatter=false` to remove backscatter without changing the
 statistic. `system` only selects the reader. Each run also saves the complete
-`fit_config.yaml`; see [Fit components](docs/fit_components.md) for definitions,
-parameter names, limits and backward compatibility.
+`fit_config.yaml` (definitions, parameter names, limits).
 
-### 4) CSV -> Plot (Hydra mode)
+### 5) KOR: CSV -> Plot (Hydra mode)
 ```bash
 python3 main.py csv2plot --config-name csv2plot_default
 ```
+
+## Automation (AUS)
+
+The three scripts run on the **Shifter PC** (precalib@10.200.102.69) as stand-alone copies of
+`runners/1112-AUSbackup.sh`, `runners/1113-AUSjobsubmission.sh`, `runners/1113-AUSUAP-auto.sh`
+(UAP-Shifter is not cloned on the Shifter PC). They log in to sukap as `hkpd` and use the UAP-Shifter of
+`/disk03/usr8/kanai062/UAP-Shifter` there (must be on branch 1116 and readable by hkpd):
+
+```text
+1112-AUSbackup.sh         AUS DAQ -> Shifter -> sukap (MD5 checked), every 5 min
+1113-AUSjobsubmission.sh  aus_cluster_runner-raw2root-hk.py for every new point (hk queue, max 100 jobs)
+1113-AUSUAP-auto.sh       aus_run_point.sh for every finished job, aus_merge_plot.py per PMT,
+                          AUSwaveform-2Dplot.py, PNG copies to /home/hkpd/public_html/precalib/aus_daily_check/
+```
+Commands while running: `status | log | quit | help`. When a script in `runners/` changes, copy it to the Shifter PC again.
