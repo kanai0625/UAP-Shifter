@@ -10,11 +10,14 @@ Four-step charge fit (default for --kind charge; --no-ped-prefit = original one-
   2. SPE start = most populated bin (SPE_BIN = 0.05 pC) above the pedestal, i.e. above
      pedestal mean + SPE_PED_GAP (3) x sigma (or above --spe-search-min Q pC);
      SPE + 2PE Gaussians (+ pedestal tail, shape of step 1) fitted (extended unbinned ML) to the
-     charges in SPE_RANGE (default 1 .. 5 pC), 2PE: mean = ped + 2 (SPE - ped) as in UAP
+     charges in SPE_RANGE (default 1 .. 5 pC), 2PE: mean = ped + 2 (SPE - ped) as in UAP,
+     SPE mean within start +- SPE_HALFWIDTH, N_2PE / N_SPE = occupancy / 2 (Poisson; occupancy =
+     -ln(N_pedestal / N) from step 1; --pe2-free: 2PE yield free)
   3. pedestal + SPE + 2PE (no backscatter) over the whole range: start values = steps 1/2,
      pedestal mean/sigma bounded to step 1 +- PED_BOUND * (fit error),
      SPE mean bounded to  step-2 mean +- SPE_HALFWIDTH (1 pC),  SPE sigma to 0.25 .. 2 x step-2 sigma,
      the SPE priors of the config (spe_mu_prior / spe_sigma_prior) are not used (--keep-spe-prior)
+  steps 3 and 4 use Poisson weights for the Gaussians (UAP poisson_gaussian; --pe2-free: free weights)
   4. + backscatter: pedestal mean/sigma bounded to step 3 +- PED_BOUND (2) x error,
      SPE mean/sigma to step 3 +- SPE_BOUND (10) x error
   CSV: final (step 4) result + ped_prefit_* (1) + spe_seed_* (2) + step2_* (3).
@@ -78,7 +81,11 @@ def main():
     ap.add_argument("--spe-search-min", type=float, default=None,
                     help="step 2: SPE start = max bin above this [pC] (default: pedestal + --spe-ped-gap sigma)")
     ap.add_argument("--spe-range", default="1,5", help="step 2: SPE + 2PE fit range LO,HI [pC] (default 1,5)")
-    ap.add_argument("--spe-halfwidth", type=float, default=1.0, help="step 3: SPE mean kept in step-2 mean +- N [pC]")
+    ap.add_argument("--spe-halfwidth", type=float, default=1.0,
+                    help="step 2: SPE mean within start +- N; step 3: within step-2 mean +- N [pC]")
+    ap.add_argument("--pe2-free", action="store_true",
+                    help="2PE yield free (default: Poisson, N_2PE/N_SPE = occupancy/2 in step 2, "
+                         "poisson_gaussian weights in steps 3/4)")
     ap.add_argument("--spe-bin", type=float, default=0.05, help="step 2: histogram bin width [pC]")
     ap.add_argument("--spe-ped-gap", type=float, default=3.0,
                     help="step 2: SPE start searched above pedestal + N sigma; step 3: SPE mean kept above it")
@@ -106,6 +113,9 @@ def main():
         cfg.update(TIMING_DEFAULTS)
         cfg.update(window_half_width=0.5 * a.pmt_twin, sipm_window_half_width=0.5 * a.sipm_twin,
                    plot_nbins=max(10, int(round(a.pmt_twin / 2.0))))   # 2 ns bins (= 1 sample) in the figure
+    if a.kind == "charge" and not a.no_ped_prefit and not a.three_step and not a.pe2_free \
+            and not any(i.split("=", 1)[0].strip() == "poisson_gaussian" for i in a.set):
+        cfg["poisson_gaussian"] = True           # steps 3/4: Poisson weights (2PE cannot dominate the SPE)
     for item in a.set:
         k, v = item.split("=", 1)
         cfg[k.strip()] = yaml.safe_load(v)
@@ -123,7 +133,7 @@ def main():
         else:
             install_steps(a.ped_window, a.ped_bound, a.spe_bound, a.spe_search_min, a.spe_halfwidth,
                           a.spe_bin, a.keep_spe_prior, a.spe_ped_gap,
-                          tuple(float(v) for v in a.spe_range.split(",")))
+                          tuple(float(v) for v in a.spe_range.split(",")), a.pe2_free)
     from uap.fit import aus_plot_style
     if a.kind == "timing":
         aus_plot_style.install_timing_bkg(a.tbkg, a.tbkg_sipm)

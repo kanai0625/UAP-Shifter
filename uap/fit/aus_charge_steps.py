@@ -79,10 +79,12 @@ def fit_gauss_range(x, lo, hi, mu0, sig0):
                 sigma_err=float(np.sqrt(cov[1, 1])), n=int(x.size), lo=lo, hi=hi, valid=bool(m.valid))
 
 
-def fit_spe_2pe(x, lo, hi, mu0, sig0, ped=None):
+def fit_spe_2pe(x, lo, hi, mu0, sig0, ped=None, pe2_ratio=None, mu_lim=None):
     """Extended unbinned ML fit of SPE + 2PE Gaussians (+ the pedestal tail, shape fixed from step 1)
     to the charges in [lo, hi].  Peak positions as in UAP's gaussian_shapes:
       mean_n = ped + n (mu_spe - ped),  sigma_n^2 = sigma_ped^2 + n (sigma_spe^2 - sigma_ped^2).
+    pe2_ratio: N_2PE / N_SPE fixed to this value (Poisson: occupancy / 2); None = 2PE yield free.
+    mu_lim   : (lo, hi) limits of the SPE mean (default: the fit range).
     Returns dict or None."""
     from iminuit import Minuit
     from scipy.stats import norm
@@ -104,6 +106,8 @@ def fit_spe_2pe(x, lo, hi, mu0, sig0, ped=None):
         comps = shapes(mu, sig)
         dens = np.zeros_like(x)
         total = 0.0
+        if pe2_ratio is not None:
+            n2 = n1 * pe2_ratio
         for n, (m, s) in zip((n0 if use_ped else 0.0, n1, n2), comps):
             if n <= 0:
                 continue
@@ -116,15 +120,18 @@ def fit_spe_2pe(x, lo, hi, mu0, sig0, ped=None):
     nll.errordef = Minuit.LIKELIHOOD
     n = float(x.size)
     m = Minuit(nll, mu0, sig0, 0.05 * n if use_ped else 0.0, 0.7 * n, 0.2 * n, name=("mu", "sig", "n0", "n1", "n2"))
-    m.limits = [(lo, hi), (0.02, max(hi - lo, 0.1)), (0.0, 5 * n), (0.0, 5 * n), (0.0, 5 * n)]
+    m.limits = [mu_lim or (lo, hi), (0.02, max(hi - lo, 0.1)), (0.0, 5 * n), (0.0, 5 * n), (0.0, 5 * n)]
     if not use_ped:
         m.fixed["n0"] = True
+    if pe2_ratio is not None:
+        m.fixed["n2"] = True
     m.migrad()
     m.hesse()
     cov = np.asarray(m.covariance) if m.covariance is not None else np.full((5, 5), np.nan)
     v = m.values
+    n2 = float(v["n1"]) * pe2_ratio if pe2_ratio is not None else float(v["n2"])
     return dict(mean=float(v["mu"]), sigma=float(v["sig"]), mean_err=float(np.sqrt(abs(cov[0, 0]))),
-                sigma_err=float(np.sqrt(abs(cov[1, 1]))), spe_yield=float(v["n1"]), pe2_yield=float(v["n2"]),
+                sigma_err=float(np.sqrt(abs(cov[1, 1]))), spe_yield=float(v["n1"]), pe2_yield=n2,
                 ped_tail_yield=float(v["n0"]), n=int(x.size), lo=lo, hi=hi, valid=bool(m.valid))
 
 
@@ -152,7 +159,8 @@ def spe_start(data, search_min=1.0, bin_w=0.05, xmax=None):
 
 
 def install_steps(ped_window, ped_bound, spe_bound=None, spe_search_min=None, spe_halfwidth=1.0,
-                  spe_bin=0.05, keep_spe_prior=False, spe_ped_gap=3.0, spe_range=(1.0, 5.0), min_err_frac=1e-3):
+                  spe_bin=0.05, keep_spe_prior=False, spe_ped_gap=3.0, spe_range=(1.0, 5.0), pe2_free=False,
+                  min_err_frac=1e-3):
     """Four-step charge fit:
        1 pedestal
        2 SPE start = most populated bin above the pedestal (ped mean + SPE_PED_GAP sigma, or SPE_SEARCH_MIN),
@@ -236,7 +244,20 @@ def install_steps(ped_window, ped_bound, spe_bound=None, spe_search_min=None, sp
             if not (rlo < seed < rhi):
                 log.warning("[STEP2 seed] %s  start %.3f pC is outside the SPE range %.2f..%.2f pC",
                             request.plotname, seed, rlo, rhi)
-            spe = fit_spe_2pe(data, rlo, rhi, float(np.clip(seed, rlo, rhi)), max(0.3 * (seed - smin), 0.1), ped)
+            # Poisson: N_2PE / N_SPE = occupancy / 2, occupancy = -ln(N_pedestal / N) from the step-1 fit
+            ratio, occ = None, np.nan
+            if not pe2_free and ped is not None and ped["n"] > 0:
+                from math import erf, sqrt
+                lo1, hi1 = ped["lo"], ped["hi"]
+                acc = 0.5 * (erf((hi1 - ped["mean"]) / (ped["sigma"] * sqrt(2))) -
+                             erf((lo1 - ped["mean"]) / (ped["sigma"] * sqrt(2))))
+                n_ped = ped["n"] / max(acc, 1e-3)
+                if 0 < n_ped < data.size:
+                    occ = -np.log(n_ped / data.size)
+                    ratio = occ / 2.0
+            mlim = (max(rlo, seed - spe_halfwidth), min(rhi, seed + spe_halfwidth))
+            spe = fit_spe_2pe(data, rlo, rhi, float(np.clip(seed, *mlim)), max(0.3 * (seed - smin), 0.1), ped,
+                              ratio, mlim)
             if spe is not None and np.isfinite(spe["mean"]) and rlo < spe["mean"] < rhi:
                 mu, sg = spe["mean"], spe["sigma"]
                 lo = mu - spe_halfwidth
@@ -245,9 +266,11 @@ def install_steps(ped_window, ped_bound, spe_bound=None, spe_search_min=None, sp
                 spe_init = dict(mean=mu, sigma=sg, window=(lo, mu + spe_halfwidth))
                 bounds["mu_spe"] = (lo, mu + spe_halfwidth)
                 bounds["sigma_spe"] = (max(1e-3, 0.25 * sg), 2.0 * sg)
-                log.info("[STEP2 seed] %s  start %.3f pC (max bin above %.3f pC, %s)  SPE+2PE fit in %.2f..%.2f pC: "
-                         "mu=%.4f+-%.4f  sigma=%.4f+-%.4f  N_SPE=%.0f N_2PE=%.0f N_ped-tail=%.0f  (n=%d, valid=%s)",
-                         request.plotname, seed, smin, note, rlo, rhi, mu, spe["mean_err"], sg, spe["sigma_err"],
+                log.info("[STEP2 seed] %s  start %.3f pC (max bin above %.3f pC, %s)  SPE+2PE fit in %.2f..%.2f pC "
+                         "(SPE mean %.2f..%.2f, %s): mu=%.4f+-%.4f  sigma=%.4f+-%.4f  N_SPE=%.0f N_2PE=%.0f "
+                         "N_ped-tail=%.0f  (n=%d, valid=%s)", request.plotname, seed, smin, note, rlo, rhi,
+                         mlim[0], mlim[1], "2PE free" if ratio is None else
+                         "N_2PE/N_SPE = occupancy/2 = %.4f" % ratio, mu, spe["mean_err"], sg, spe["sigma_err"],
                          spe["spe_yield"], spe["pe2_yield"], spe["ped_tail_yield"], spe["n"], spe["valid"])
             else:                                      # no fit: the start value itself is used
                 sig0 = max(0.3 * (seed - smin), 0.1)
@@ -298,6 +321,7 @@ def install_steps(ped_window, ped_bound, spe_bound=None, spe_search_min=None, sp
         out["ped_prefit_bound_nerr"] = ped_bound
         out["spe_seed_start"] = np.nan if seed is None else seed
         out["spe_seed_search_min"] = smin
+        out["spe_seed_occupancy"] = occ if seed is not None else np.nan
         for k in ("mean", "mean_err", "sigma", "sigma_err", "spe_yield", "pe2_yield", "n", "lo", "hi"):
             out["spe_seed_" + k] = np.nan if spe is None else spe[k]
         if step2 is not None:
@@ -309,7 +333,7 @@ def install_steps(ped_window, ped_bound, spe_bound=None, spe_search_min=None, sp
     extra = [("ped_prefit_" + k, "ped_prefit_" + k)
              for k in ("mean", "mean_err", "sigma", "sigma_err", "n", "lo", "hi", "valid", "bound_nerr")]
     extra += [("spe_seed_" + k, "spe_seed_" + k)
-              for k in ("start", "search_min", "mean", "mean_err", "sigma", "sigma_err", "spe_yield", "pe2_yield",
+              for k in ("start", "search_min", "occupancy", "mean", "mean_err", "sigma", "sigma_err", "spe_yield", "pe2_yield",
                         "n", "lo", "hi")]
     extra += [("step2_" + k, "step2_" + k) for k in STEP2_KEYS]
     have = {k for k, _ in csf.ChargeSpectrumFitter.FIT_FIELD_MAP}

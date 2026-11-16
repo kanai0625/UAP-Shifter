@@ -9,6 +9,7 @@
 #    charge    runners/aus_root2csv.py --kind charge   (main ROOT file)
 #                4 steps: 1 pedestal  2 SPE start = most populated 0.05 pC bin above the pedestal (ped + 3 sigma),
 #                         SPE + 2PE fitted in 1 .. 5 pC  3 pedestal + SPE + 2PE  4 + backscatter
+#                         (2PE / SPE fixed by Poisson statistics: occupancy from the pedestal fraction)
 #    timing    runners/aus_root2csv.py --kind timing   (fixed-threshold ROOT file)
 #                window = peak of the -520..520 ns histogram (2 ns bins) +- TWIN/2 (PMT), SiPM 60 ns
 #                PMT: prompt EMG -> late-pulse EMG -> linear background -> all free  (unbinned NLL)
@@ -44,7 +45,8 @@
 #    -spe-range L,H    charge step 2: SPE + 2PE fit range [pC]                    (default 1,5)
 #    -spe-gap N        charge step 2: SPE start searched above pedestal + N sigma (default 3)
 #    -spe-min Q        charge step 2: SPE start searched above Q pC instead       (default: -spe-gap)
-#    -spe-hw W         charge step 3: SPE mean kept in step-2 mean +- W pC        (default 1.0)
+#    -spe-hw W         charge step 2/3: SPE mean kept in start / step-2 mean +- W pC (default 1.0)
+#    -pe2-free         charge: 2PE yield free (default: Poisson, N_2PE/N_SPE = occupancy/2)
 #    -spe-bound N      charge step 4: SPE = step 3 +- N x fit error               (default 10)
 #    -set KEY=VALUE    charge config override (repeatable)
 #    -single-fit / -three-step   original one-step / previous three-step charge fit
@@ -89,6 +91,7 @@ while [ $# -gt 0 ]; do
         -spe-min) CSET+=(--spe-search-min "$2"); shift 2 ;;
         -spe-range) CSET+=(--spe-range "$2"); shift 2 ;;
         -spe-gap) CSET+=(--spe-ped-gap "$2"); shift 2 ;;
+        -pe2-free) CSET+=(--pe2-free); shift ;;
         -spe-hw) CSET+=(--spe-halfwidth "$2"); shift 2 ;;
         -spe-bound) CSET+=(--spe-bound "$2"); shift 2 ;;
         -set) CSET+=(--set "$2"); shift 2 ;;
