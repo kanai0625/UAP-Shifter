@@ -18,7 +18,7 @@ Step-by-step commands: `UAP-manual-on-sukap.md` / `.pdf`.
 |---|---|---|
 | raw → root | pyrate + `R12860_config_dat*.yaml` | `runners/aus_raw2root.py`: ch0 pedestal = last 30 samples, others first 40; PulseStart = first sample > 2.2 σ; charge = Σ(V − baseline) in [PS − 10, PS + 50) × 2 ns / 50 Ω (DT5730S); second ROOT file with a fixed PMT threshold (2.0 mV, rising edge of the largest pulse) for the timing |
 | jobs | `aus_cluster_runner-dat-hk.py` | `aus_cluster_runner-raw2root-hk.py` (same options and output lines) |
-| charge fit | one step | 4 steps: pedestal → SPE start (most populated 0.05 pC bin ≥ 1 pC, Gaussian in ± 1 pC) → pedestal + SPE + 2PE → + backscatter; every parameter in the figure legend |
+| charge fit | one step | 4 steps: pedestal → SPE start (most populated 0.05 pC bin above pedestal + 3σ), SPE + 2PE fitted in 1–5 pC → pedestal + SPE + 2PE → + backscatter; every parameter in the figure legend |
 | timing fit | EMG + linear background, 2.2 σ PulseStart | fixed-threshold PulseStart, PMT window 100 ns: prompt EMG → late-pulse EMG → linear background → all free (unbinned); μ and FWHM marked in the figure |
 | per point | `main.py root2csv` (charge, time) | `runners/aus_run_point.sh` (charge, timing, plots, SiPM waveforms / distributions) |
 | whole PMT | csv2plot | `runners/aus_merge_plot.py`: gain (pedestal subtracted), relative gain, relative QE (SiPM normalised), arrival time, TTS (FWHM of the prompt EMG), late-pulse fraction |

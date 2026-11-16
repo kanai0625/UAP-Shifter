@@ -315,7 +315,7 @@ The same commands are used by the automation on the Shifter PC (AUS5).
 | PulseStart (charge) | first sample after the baseline window with V > NSIGMA × σ (NSIGMA = 2.2) |
 | charge | Σ V in [PulseStart − 10, PulseStart + 50) × 2 ns / 50 Ω [pC] |
 | PulseStart (timing) | second ROOT file (`outputs_vcut<V>mV`): PMT events whose largest pulse is above **V = 2.0 mV**; PulseStart = rising edge (first sample above V going back from the maximum). Trigger and SiPM as above |
-| charge fit | 4 steps: 1 pedestal (Gaussian, ±2σ) → 2 SPE start = most populated 0.05 pC bin at ≥ 1 pC, Gaussian in start ± 1 pC → 3 pedestal + SPE + 2PE (SPE kept in start ± 1 pC, no SPE prior) → 4 + backscatter (SPE ± 10 × fit error of step 3). Every fit parameter is written in the legend of the figure |
+| charge fit | 4 steps: 1 pedestal (Gaussian, ±2σ) → 2 SPE start = most populated 0.05 pC bin above pedestal + 3σ; SPE + 2PE (+ pedestal tail) fitted in 1–5 pC → 3 pedestal + SPE + 2PE over the whole range (SPE kept in step-2 mean ± 1 pC, no SPE prior) → 4 + backscatter (SPE ± 10 × fit error of step 3). Every fit parameter is written in the legend of the figure |
 | timing fit | Δt = PulseStart(PMT) − PulseStart(ch0); window = peak of the −520..520 ns histogram (2 ns bins) ± 50 ns (PMT, 100 ns), ± 30 ns (SiPM). PMT: prompt EMG (data in peak −10..+6 ns) → late-pulse EMG (data after the prompt) → linear background → all free (extended unbinned NLL). μ and FWHM of the prompt EMG are marked in the figure |
 | results | gain = (μ_SPE − μ_ped)/e (`gain_pedestal_subtracted`); arrival time = μ of the prompt EMG; TTS = FWHM of the prompt EMG (`FWHM_signal`); relative QE = (N_prompt / N_SiPM) relative to θ=0, φ=0; late fraction = N_late / (N_prompt + N_late) |
 
@@ -345,7 +345,8 @@ Main options (all: `runners/aus_run_point.sh -h`)
 | `-twin T` / `-sipm-twin T` | timing window width [ns] PMT / SiPM | 100 / 60 |
 | `-prompt-range L,H` | timing step 1: prompt EMG fitted in peak+L..peak+H ns | -10,6 |
 | `-no-late` (`-tbkg const\|linear\|none`) | timing without the late-pulse EMG | – |
-| `-spe-min Q` / `-spe-hw W` / `-spe-bound N` | charge: SPE start ≥ Q pC / window ± W pC / step 4 ± N × error | 1.0 / 1.0 / 10 |
+| `-spe-range L,H` / `-spe-gap N` / `-spe-min Q` | charge step 2: SPE + 2PE fit range [pC] / SPE start above pedestal + Nσ / or above Q pC | 1,5 / 3 / – |
+| `-spe-hw W` / `-spe-bound N` | charge: step 3 SPE in step-2 mean ± W pC / step 4 ± N × error | 1.0 / 10 |
 | `-set KEY=VALUE` | charge config override, e.g. `-set charge_fit_range=[-1,8]` | – |
 | `-root F -vroot F` | use existing ROOT files (e.g. of a job) → no raw2root | – |
 | `-out DIR` | output directory | see above |

@@ -7,12 +7,13 @@ uap/fit/aus_charge_steps.py, aus_timing_late.py, aus_plot_style.py.
 Four-step charge fit (default for --kind charge; --no-ped-prefit = original one-step fit)
   1. pedestal: Gaussian fitted (unbinned ML, truncated to the window) to the charges within
      pedestal peak +- PED_WINDOW * sigma  (window re-centred twice)
-  2. SPE seed: histogram of the charges >= SPE_SEARCH_MIN (1 pC, bins SPE_BIN = 0.05 pC);
-     the bin with the most events = SPE start value; SPE Gaussian fitted (truncated ML) to the
-     charges within  start +- SPE_HALFWIDTH (1 pC)  (lower edge at least pedestal + 3 sigma, --spe-ped-gap)
-  3. pedestal + SPE + 2PE (no backscatter): start values = steps 1/2,
+  2. SPE start = most populated bin (SPE_BIN = 0.05 pC) above the pedestal, i.e. above
+     pedestal mean + SPE_PED_GAP (3) x sigma (or above --spe-search-min Q pC);
+     SPE + 2PE Gaussians (+ pedestal tail, shape of step 1) fitted (extended unbinned ML) to the
+     charges in SPE_RANGE (default 1 .. 5 pC), 2PE: mean = ped + 2 (SPE - ped) as in UAP
+  3. pedestal + SPE + 2PE (no backscatter) over the whole range: start values = steps 1/2,
      pedestal mean/sigma bounded to step 1 +- PED_BOUND * (fit error),
-     SPE mean bounded to  start +- SPE_HALFWIDTH,  SPE sigma to 0.25 .. 2 x step-2 sigma,
+     SPE mean bounded to  step-2 mean +- SPE_HALFWIDTH (1 pC),  SPE sigma to 0.25 .. 2 x step-2 sigma,
      the SPE priors of the config (spe_mu_prior / spe_sigma_prior) are not used (--keep-spe-prior)
   4. + backscatter: pedestal mean/sigma bounded to step 3 +- PED_BOUND (2) x error,
      SPE mean/sigma to step 3 +- SPE_BOUND (10) x error
@@ -74,11 +75,13 @@ def main():
                     help="last step SPE bounds: previous best +- N x fit error (default 10; --three-step: = --ped-bound; "
                          "0 = only the step-2 window)")
     ap.add_argument("--ped-bound", type=float, default=2.0, help="steps 3/4 bounds: previous best +- N x fit error")
-    ap.add_argument("--spe-search-min", type=float, default=1.0, help="step 2: SPE start = max bin above this [pC]")
-    ap.add_argument("--spe-halfwidth", type=float, default=1.0, help="step 2/3: SPE fit window start +- N [pC]")
+    ap.add_argument("--spe-search-min", type=float, default=None,
+                    help="step 2: SPE start = max bin above this [pC] (default: pedestal + --spe-ped-gap sigma)")
+    ap.add_argument("--spe-range", default="1,5", help="step 2: SPE + 2PE fit range LO,HI [pC] (default 1,5)")
+    ap.add_argument("--spe-halfwidth", type=float, default=1.0, help="step 3: SPE mean kept in step-2 mean +- N [pC]")
     ap.add_argument("--spe-bin", type=float, default=0.05, help="step 2: histogram bin width [pC]")
     ap.add_argument("--spe-ped-gap", type=float, default=3.0,
-                    help="step 2/3: SPE window starts at least at pedestal + N sigma (0 = off)")
+                    help="step 2: SPE start searched above pedestal + N sigma; step 3: SPE mean kept above it")
     ap.add_argument("--keep-spe-prior", action="store_true", help="keep spe_mu_prior/spe_sigma_prior of the config")
     ap.add_argument("--three-step", action="store_true", help="previous 3-step fit (no SPE seed step)")
     ap.add_argument("--pmt-twin", type=float, default=100.0, help="timing: PMT window width [ns] (default 100)")
@@ -119,7 +122,8 @@ def main():
             install_two_step(a.ped_window, a.ped_bound, a.spe_bound)
         else:
             install_steps(a.ped_window, a.ped_bound, a.spe_bound, a.spe_search_min, a.spe_halfwidth,
-                          a.spe_bin, a.keep_spe_prior, a.spe_ped_gap)
+                          a.spe_bin, a.keep_spe_prior, a.spe_ped_gap,
+                          tuple(float(v) for v in a.spe_range.split(",")))
     from uap.fit import aus_plot_style
     if a.kind == "timing":
         aus_plot_style.install_timing_bkg(a.tbkg, a.tbkg_sipm)
