@@ -409,16 +409,22 @@ python3 runners/aus_sipm_wfdist.py    --input-dir $R/wavesave_$pt --out-dir <dir
 ```
 
 ## AUS4 : csv2plot (whole PMT)
-Merges `$P/thetaX_phiY/{charge,time}/csv/*.csv`, recomputes the values relative to θ=0, φ=0 and plots them vs θ (one line per φ):
+Merges `$P/thetaX_phiY/{charge,time}/csv/*.csv`, recomputes the values relative to θ=0, φ=0 and makes three plots per quantity (φ drawn in −180…180°, e.g. 225 → −135):
+
+* `Q_<PMT>.png` : x = φ, one line per θ ring (θ=0 = reference point)
+* `Q_map_<PMT>.png` : polar map, angle = φ, radius = θ, colour and number = value
+* `Q_theta_<PMT>.png` : x = θ, every point + mean over φ of each ring (bar = spread over φ)
+
+Relative values: the error bars are the error of the point only; the error of the θ=0 reference (common to all points) is written in the title.
 
 ```
 python3 runners/aus_merge_plot.py $P PMT_label
 ```
 | file | content |
 |---|---|
-| `$P/charge/aus_charge_results.csv`, `gain_<PMT>.png`, `relative_gain_<PMT>.png` | gain (pedestal subtracted), relative gain |
-| `$P/time/aus_results.csv`, `relative_QE_<PMT>.png` | relative QE (SiPM normalised) |
-| `$P/time/arrival_time_<PMT>.png`, `TTS_<PMT>.png`, `late_fraction_<PMT>.png` | arrival time (μ), TTS (FWHM of the prompt EMG), late-pulse fraction |
+| `$P/charge/aus_charge_results.csv`, `gain_*.png`, `relative_gain_*.png` | gain (pedestal subtracted), relative gain |
+| `$P/time/aus_results.csv`, `relative_QE_*.png` | relative QE (SiPM normalised) |
+| `$P/time/arrival_time_*.png`, `TTS_*.png`, `late_fraction_*.png` | arrival time (μ), TTS (FWHM of the prompt EMG), late-pulse fraction |
 
 ## AUS5 : automation on the Shifter PC
 Run on the Shifter PC (precalib@10.200.102.69) in this order, each in its own terminal (commands: `status | log | quit | help`):

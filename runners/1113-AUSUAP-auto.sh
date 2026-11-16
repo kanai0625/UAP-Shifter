@@ -26,7 +26,8 @@
 #       values relative to theta=0,phi=0, and plots
 #         <PMT>/charge/  aus_charge_results.csv, gain (pedestal subtracted), relative gain
 #         <PMT>/time/    aus_results.csv, relative QE, arrival time, TTS (FWHM of the prompt EMG), late fraction
-#       every plot: x = theta, one line per phi (every phi value in the scan)
+#       every quantity: Q_<PMT>.png (x = phi, one line per theta), Q_map_<PMT>.png (polar map),
+#                       Q_theta_<PMT>.png (x = theta, mean over phi)
 #    5. waveform 2D plots (time vs signal, all events) for every submitted point
 #       (raw waveN.dat, no need to wait for the job), at most WF_PER_CYCLE per cycle
 #         <PMT>/waveformdist/thetaX_phiY_chN.png      (runners/AUSwaveform-2Dplot.py)
