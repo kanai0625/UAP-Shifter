@@ -30,7 +30,8 @@
 #    5. waveform 2D plots (time vs signal, all events) for every submitted point
 #       (raw waveN.dat, no need to wait for the job), at most WF_PER_CYCLE per cycle
 #         <PMT>/waveformdist/thetaX_phiY_chN.png      (runners/AUSwaveform-2Dplot.py)
-#    6. copy all PNGs of every updated PMT to the web directory (world readable)
+#    6. copy all PNGs of a PMT to the web directory (world readable) right after its plots of step 4
+#       (waveform-only updates: at the end of the cycle)
 #         WEB_BASE/scan_.../<PMT>/charge/        charge fits of every theta_phi + gain, relative gain
 #         WEB_BASE/scan_.../<PMT>/timing/        timing fits of every theta_phi + relative QE, arrival time, TTS
 #         WEB_BASE/scan_.../<PMT>/waveformdist/  thetaX_phiY_chN.png, thetaX_phiY_sipm_*.png
@@ -301,18 +302,24 @@ echo "PUB_OK:\$n"
 EOF
     }
 
+    publish_one() {   # $1 "scan/pmt"
+        local sp=$1 r
+        ST_STATE="copying PNGs to the web dir  $sp"; ST_CUR=""; write_status
+        r=$(publish_pmt "${sp%%/*}" "${sp#*/}")
+        if [[ "$r" == PUB_OK* ]]; then
+            N_PUB=$(( N_PUB + 1 ))
+            log "[WEB]     $sp  -> aus_daily_check/$sp/{charge,timing,waveformdist,plots}  (${r#PUB_OK:} png)"
+        else
+            log "[WEB NG]  $sp – ${r#PUB_NG:}"
+        fi
+        unset 'PUBQ[$sp]'
+    }
+
     publish_pending() {
-        local sp r
+        local sp
         for sp in "${!PUBQ[@]}"; do
             [ -f "$STOP_FILE" ] && break
-            ST_STATE="copying PNGs to the web dir  $sp"; ST_CUR=""; write_status
-            r=$(publish_pmt "${sp%%/*}" "${sp#*/}")
-            if [[ "$r" == PUB_OK* ]]; then
-                N_PUB=$(( N_PUB + 1 )); unset 'PUBQ[$sp]'
-                log "[WEB]     $sp  -> aus_daily_check/$sp/{charge,timing,waveformdist,plots}  (${r#PUB_OK:} png)"
-            else
-                log "[WEB NG]  $sp – ${r#PUB_NG:}"; unset 'PUBQ[$sp]'
-            fi
+            publish_one "$sp"
         done
     }
 
@@ -337,7 +344,8 @@ EOF
         ST_STATE="plotting  $sp"; ST_CUR=""; write_status
         r=$(merge_plot "${sp%%/*}" "${sp#*/}")
         if [ "$r" = "MERGE_PLOT_DONE" ]; then
-            N_PLOT=$(( N_PLOT + 1 )); PUBQ[$sp]=1; log "[PLOT]    $sp  -> charge/ time/ updated"
+            N_PLOT=$(( N_PLOT + 1 )); log "[PLOT]    $sp  -> charge/ time/ updated"
+            publish_one "$sp"     # copy this PMT to the web dir right away (not at the end of the cycle)
         else
             log "[PLOT NG] $sp – ${r:-no output}  (see <PMT>/merge_plot.log)"
         fi
