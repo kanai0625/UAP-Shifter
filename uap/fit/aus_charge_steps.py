@@ -172,7 +172,7 @@ def install_steps(ped_window, ped_bound, spe_bound=None, spe_search_min=None, sp
 
     original = csf.ChargeSpectrumFitter._fit_gaussian_peaks
     log = logging.getLogger("four_step")
-    spe_n = 10.0 if spe_bound is None else spe_bound      # step 4 SPE: step 3 +- 10 x fit error (default)
+    spe_n = 0.0 if spe_bound is None else spe_bound       # step 4 SPE: 0 = free within the step-2 window (default)
 
     def window(value, err, ref, n=None):
         n = ped_bound if n is None else n

@@ -14,7 +14,9 @@
 #       exists and was not modified for ROOT_SETTLE seconds
 #       (job gone but no root file -> [JOBFAIL] in the log)
 #    3. per point: runners/aus_run_point.sh with the ROOT files of the job (same as the manual)
-#         <PMT>/thetaX_phiY/charge/  4-step charge fit (pedestal -> SPE+2PE in 1..5 pC -> ped+SPE+2PE -> backscatter)
+#         <PMT>/thetaX_phiY/charge/  4-step charge fit: pedestal -> SPE+2PE in 1..5 pC (SPE start = max bin above
+#                                    ped + 3 sigma, 2PE/SPE = occupancy/2) -> ped+SPE+2PE (Poisson weights)
+#                                    -> + backscatter (SPE free within the step-2 window)
 #         <PMT>/thetaX_phiY/time/    timing fit of outputs_vcut<VCUT>mV (fixed PMT threshold VCUT mV):
 #                                    prompt EMG -> late-pulse EMG -> linear background, PMT window 100 ns
 #         <PMT>/thetaX_phiY/plots/   PulseStart / delta t / charge / PeakHeight + summary.txt

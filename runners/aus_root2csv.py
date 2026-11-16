@@ -19,7 +19,7 @@ Four-step charge fit (default for --kind charge; --no-ped-prefit = original one-
      the SPE priors of the config (spe_mu_prior / spe_sigma_prior) are not used (--keep-spe-prior)
   steps 3 and 4 use Poisson weights for the Gaussians (UAP poisson_gaussian; --pe2-free: free weights)
   4. + backscatter: pedestal mean/sigma bounded to step 3 +- PED_BOUND (2) x error,
-     SPE mean/sigma to step 3 +- SPE_BOUND (10) x error
+     SPE free within the step-2 window (--spe-bound N: step 3 +- N x error instead)
   CSV: final (step 4) result + ped_prefit_* (1) + spe_seed_* (2) + step2_* (3).
   Figures: ..._log.png (step 4) and ..._step2_spe_log.png (step 3).
 
@@ -75,8 +75,8 @@ def main():
     ap.add_argument("--no-ped-prefit", action="store_true", help="charge: original one-step UAP fit")
     ap.add_argument("--ped-window", type=float, default=2.0, help="step 1 window: peak +- N sigma")
     ap.add_argument("--spe-bound", type=float, default=None,
-                    help="last step SPE bounds: previous best +- N x fit error (default 10; --three-step: = --ped-bound; "
-                         "0 = only the step-2 window)")
+                    help="last step SPE bounds: previous best +- N x fit error (default 0 = only the step-2 window; "
+                         "--three-step: default = --ped-bound)")
     ap.add_argument("--ped-bound", type=float, default=2.0, help="steps 3/4 bounds: previous best +- N x fit error")
     ap.add_argument("--spe-search-min", type=float, default=None,
                     help="step 2: SPE start = max bin above this [pC] (default: pedestal + --spe-ped-gap sigma)")

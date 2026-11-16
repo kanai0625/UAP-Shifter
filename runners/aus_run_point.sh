@@ -47,7 +47,7 @@
 #    -spe-min Q        charge step 2: SPE start searched above Q pC instead       (default: -spe-gap)
 #    -spe-hw W         charge step 2/3: SPE mean kept in start / step-2 mean +- W pC (default 1.0)
 #    -pe2-free         charge: 2PE yield free (default: Poisson, N_2PE/N_SPE = occupancy/2)
-#    -spe-bound N      charge step 4: SPE = step 3 +- N x fit error               (default 10)
+#    -spe-bound N      charge step 4: SPE = step 3 +- N x fit error (default 0 = free in the step-2 window)
 #    -set KEY=VALUE    charge config override (repeatable)
 #    -single-fit / -three-step   original one-step / previous three-step charge fit
 #    -time-nsigma      also the timing fit of the main ROOT file (NSIGMA PulseStart) -> time_nsigma/
