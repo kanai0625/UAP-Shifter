@@ -184,9 +184,16 @@ def install_timing():
                 yhalf = 0.5 * (p["sig_yield"] * tf.emg_pdf(np.array([xpk]), p["mu"], p["lambd"], p["sigma"],
                                                             (x0, x1))[0] * SAMPLE_NS)
                 yhalf += (np.interp(xpk, xf, bkg) if has_bkg else 0.0)
-                ax.annotate("", xy=(xl, yhalf), xytext=(xh, yhalf),
-                            arrowprops=dict(arrowstyle="<->", color="0.3", lw=1.4))
+                # arrow kept inside the fit window (a FWHM wider than the window made the PNG very wide)
+                xa, xb = max(xl, x0), min(xh, x1)
+                if xb > xa:
+                    style = {(True, True): "<->", (True, False): "<-", (False, True): "->", (False, False): "-"}[
+                        (bool(xl >= x0), bool(xh <= x1))]
+                    ax.annotate("", xy=(xa, yhalf), xytext=(xb, yhalf), annotation_clip=True,
+                                arrowprops=dict(arrowstyle=style, color="0.3", lw=1.4))
             fw_label = r"FWHM $= %.2f$ ns" % fw if np.isfinite(fw) else "FWHM = N/A"
+            if np.isfinite(fw) and (xl < x0 or xh > x1):
+                fw_label += " (wider than the window)"
             ax.plot([], [], " ", label=fw_label)
             ax.plot([], [], " ", label=r"$N_{\mathrm{signal}} = %.0f \pm %.0f$" % (
                 p["sig_yield"], out.get("sig_err", np.nan)))

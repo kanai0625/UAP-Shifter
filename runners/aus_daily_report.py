@@ -9,9 +9,9 @@ Pages  : 1  "AUS system DATE daily report": every scan / PMT (PMT #1 / #2 from p
          then 6 pages for every scan / PMT (made by aus_merge_plot.py and aus_pmt_summary.py):
            1 charge fit of all points        <PMT>/allpoints/allpoints_charge_<PMT>.png
            2 timing fit (PMT) of all points  <PMT>/allpoints/allpoints_timing_<PMT>.png
-           3 gain map + gain vs theta        <PMT>/charge/gain_map_<PMT>.png, gain_theta_<PMT>.png
-           4 relative QE map + vs theta      <PMT>/time/relative_QE_map_<PMT>.png, relative_QE_theta_<PMT>.png
-           5 TTS (FWHM) map + vs theta       <PMT>/time/TTS_map_<PMT>.png, TTS_theta_<PMT>.png
+           3 gain: map (left), vs phi per theta + vs theta (right)   <PMT>/charge/gain{_map,,_theta}_<PMT>.png
+           4 relative QE: same                                       <PMT>/time/relative_QE{_map,,_theta}_<PMT>.png
+           5 TTS (FWHM) of the target PMT: same                      <PMT>/time/TTS{_map,,_theta}_<PMT>.png
            6 timing fit (SiPM) of all points <PMT>/allpoints/allpoints_sipm_timing_<PMT>.png
 Output : <out-dir>/AUS_daily_report_DATE.pdf
 """
@@ -210,20 +210,21 @@ def main():
                 R.image(f, pth, (0.01, 0.02, 0.98, 0.92), str(pth))
                 R.add(f)
 
-        def pair(title, left, right):
+        def trio(title, left, right_top, right_bottom):
+            """map on the left; on the right: vs phi (one line per theta) above, vs theta below"""
             f = R.new("{}  –  {}".format(name, title))
             R.image(f, left, (0.01, 0.06, 0.47, 0.86), str(left))
-            R.image(f, right, (0.50, 0.06, 0.49, 0.86), str(right))
+            R.image(f, right_top, (0.49, 0.49, 0.50, 0.44), str(right_top))
+            R.image(f, right_bottom, (0.49, 0.04, 0.50, 0.44), str(right_bottom))
             R.add(f)
 
         single("charge fit, all points", d / "allpoints" / "allpoints_charge_{}.png".format(s))
         single("timing fit (target PMT), all points", d / "allpoints" / "allpoints_timing_{}.png".format(s))
-        pair("gain map / gain vs theta", d / "charge" / "gain_map_{}.png".format(s),
-             d / "charge" / "gain_theta_{}.png".format(s))
-        pair("relative QE map / relative QE vs theta", d / "time" / "relative_QE_map_{}.png".format(s),
-             d / "time" / "relative_QE_theta_{}.png".format(s))
-        pair("TTS (FWHM) map / TTS vs theta (target PMT)", d / "time" / "TTS_map_{}.png".format(s),
-             d / "time" / "TTS_theta_{}.png".format(s))
+        for t, sub, q in (("gain", "charge", "gain"), ("relative QE", "time", "relative_QE"),
+                          ("TTS (FWHM, target PMT)", "time", "TTS")):
+            trio("{} map / {} vs phi and vs theta".format(t, t.split(" (")[0]),
+                 d / sub / "{}_map_{}.png".format(q, s), d / sub / "{}_{}.png".format(q, s),
+                 d / sub / "{}_theta_{}.png".format(q, s))
         single("timing fit (SiPM), all points", d / "allpoints" / "allpoints_sipm_timing_{}.png".format(s))
 
     out_dir = Path(a.out_dir)

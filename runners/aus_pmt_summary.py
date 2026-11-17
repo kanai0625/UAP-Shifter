@@ -179,14 +179,18 @@ def pedestal(pmt_dir, serial, pts):
     log.info("pedestal -> %s", out)
 
 
-def pick(files, kind):
+def pick(files, kind, pt):
+    """charge: aus_charge_<PMT>_<pt>_0_log.png (step 4), timing: <pt>.png, SiPM: sipm_<pt>.png"""
     files = sorted(files)
     if kind == "charge":
-        best = [f for f in files if f.name.endswith("_log.png") and "step2" not in f.name]
-        return (best or [f for f in files if "step2" not in f.name] or files or [None])[0]
+        log_ = [f for f in files if f.name.endswith("_log.png") and "step2" not in f.name]
+        best = [f for f in log_ if "_{}_".format(pt) in f.name]
+        return (best or log_ or [f for f in files if "step2" not in f.name] or files or [None])[0]
     if kind == "sipm":
-        return ([f for f in files if f.name.startswith("sipm")] or [None])[0]
-    return ([f for f in files if not f.name.startswith("sipm")] or [None])[0]
+        best = [f for f in files if f.name == "sipm_{}.png".format(pt)]
+        return (best or [f for f in files if f.name.startswith("sipm")] or [None])[0]
+    best = [f for f in files if f.name == "{}.png".format(pt)]
+    return (best or [f for f in files if not f.name.startswith("sipm")] or [None])[0]
 
 
 def montage(pts, kind, title, out_stem, ncol=8, nrow=8):
@@ -202,7 +206,7 @@ def montage(pts, kind, title, out_stem, ncol=8, nrow=8):
             ax.axis("off")
         n_ok = 0
         for ax, p in zip(axs.flat, page):
-            f = pick((p["dir"] / sub / "figures").rglob("*.png"), kind)
+            f = pick((p["dir"] / sub / "figures").rglob("*.png"), kind, p["name"])
             ax.set_title(label(p), fontsize=8, color="#0b0b0b", pad=2)
             if f is None:
                 ax.text(0.5, 0.5, "no plot", ha="center", va="center", color="#898781", fontsize=9,
@@ -210,6 +214,8 @@ def montage(pts, kind, title, out_stem, ncol=8, nrow=8):
                 continue
             try:
                 im = Image.open(f).convert("RGB")
+                if im.width > 2.2 * im.height:       # old timing PNGs with a FWHM arrow far outside the plot
+                    im = im.crop((0, 0, int(1.9 * im.height), im.height))
                 im.thumbnail((560, 420))
                 ax.imshow(np.asarray(im))
                 n_ok += 1
