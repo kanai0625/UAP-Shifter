@@ -3,7 +3,7 @@
 #  1113-AUSUAP-auto.sh  –  automatic AUS point analysis + PMT plots (branch 1116)
 #  Run on : Shifter PC (precalib@10.200.102.69), next to 1113-AUSjobsubmission.sh
 #
-#  Usage :  ./1113-AUSUAP-auto.sh [-date YYYYMMDD] [-replot] [-publish]
+#  Usage :  ./1113-AUSUAP-auto.sh [-date YYYYMMDD] [-replot] [-publish] [-report-time HHMM | -no-report]
 #           ./1113-AUSUAP-auto.sh status      (show the status from another terminal)
 #
 #  Input  : SUBMIT_LIST written by 1113-AUSjobsubmission.sh (point + PJM job id of aus_raw2root.py)
@@ -28,6 +28,10 @@
 #         <PMT>/time/    aus_results.csv, relative QE, arrival time, TTS (FWHM of the prompt EMG), late fraction
 #       every quantity: Q_<PMT>.png (x = phi, one line per theta), Q_map_<PMT>.png (polar map),
 #                       Q_theta_<PMT>.png (x = theta, mean over phi)
+#       + runners/aus_pmt_summary.py (same PMT):
+#         <PMT>/pedfit/     pedestal of the charge fit: ped_<PMT>.csv (point, theta, phi, mu, sigma),
+#                           distributions, mu / sigma maps, mu / sigma vs point (measurement order)
+#         <PMT>/allpoints/  charge fit, timing fit (PMT) and timing fit (SiPM) of every point, 8 x 8 in one image
 #    5. waveform 2D plots (time vs signal, all events) for every submitted point
 #       (raw waveN.dat, no need to wait for the job), at most WF_PER_CYCLE per cycle
 #         <PMT>/waveformdist/thetaX_phiY_chN.png      (runners/AUSwaveform-2Dplot.py)
@@ -37,11 +41,16 @@
 #         WEB_BASE/scan_.../<PMT>/timing/        timing fits of every theta_phi + relative QE, arrival time, TTS
 #         WEB_BASE/scan_.../<PMT>/waveformdist/  thetaX_phiY_chN.png, thetaX_phiY_sipm_*.png
 #         WEB_BASE/scan_.../<PMT>/plots/         thetaX_phiY_{pulsestart_chN,delta_t,charge_peakheight}.png
+#         WEB_BASE/scan_.../<PMT>/charge/ped/    pedfit/*.png + ped_<PMT>.csv
+#         WEB_BASE/scan_.../<PMT>/allpoints/     allpoints_{charge,timing,sipm_timing}_<PMT>.png
 #       (file names unchanged; WEB_BASE = /home/hkpd/public_html/precalib/aus_daily_check)
+#    7. every day at REPORT_TIME (09:30): daily report of the night (scans started yesterday 09:30 .. today 09:30)
+#         runners/aus_daily_report.py -> REPORT_DIR/AUS_daily_report_YYYYMMDD.pdf (YYYYMMDD = yesterday)
+#         + copy to WEB_BASE/daily_report/        (command "report [YYYYMMDD]" = make it now)
 #  Analysed points are remembered (ANA_LIST, with the job id) and never redone,
 #  unless the point is submitted again (new job id).
 #
-#  While running, type in this terminal:  status | log | quit | help
+#  While running, type in this terminal:  status | log | report [YYYYMMDD] | quit | help
 # =====================================================================
 
 # ============================ Settings ===============================
@@ -55,6 +64,8 @@ CONDA_SH="$UAP_DIR/miniforge3/etc/profile.d/conda.sh"
 CONDA_ENV="$UAP_DIR/miniforge3/envs/hkprecal-uap"
 POINT_SH="$UAP_DIR/runners/aus_run_point.sh"
 MERGE_PY="$UAP_DIR/runners/aus_merge_plot.py"
+SUMMARY_PY="$UAP_DIR/runners/aus_pmt_summary.py"
+REPORT_PY="$UAP_DIR/runners/aus_daily_report.py"
 
 VCUT="${VCUT:-2.0}"                 # fixed PMT threshold [mV] of the timing file (same as 1113-AUSjobsubmission.sh)
 POINT_OPTS="${POINT_OPTS:--twin 100}"   # extra options of runners/aus_run_point.sh (see its -h)
@@ -64,6 +75,11 @@ WAVEFORM_PY="$UAP_DIR/runners/AUSwaveform-2Dplot.py"      # git branch 1107
 WF_OPTS="${WF_OPTS:-}"              # extra options for AUSwaveform-2Dplot.py, e.g. "--nevent 100000"
 WF_PER_CYCLE=${WF_PER_CYCLE:-10}    # waveform points per cycle (root2csv of new points is not delayed)
 WEB_BASE="/home/hkpd/public_html/precalib/aus_daily_check"   # PNG copies: <base>/scan_.../<PMT>/{charge,timing,waveformdist}
+
+REPORT_TIME="0930"                  # daily report every day at HHMM (-report-time HHMM, -no-report)
+REPORT_DIR="/disk03/hk04/precalib/production/aus/daily_report"   # AUS_daily_report_YYYYMMDD.pdf
+ENV_PLOT_DIR="/disk03/hk04/precalib/production/env/plot"         # ENV plots of 1115-ENVbackup.sh (page 2: 09:00)
+SLOT_MAP="${SLOT_MAP:-3:1,5:2}"     # pmt_ch -> PMT #1 / #2 on the first report page
 
 INTERVAL=${INTERVAL:-300}           # [s] between cycles
 ROOT_SETTLE=${ROOT_SETTLE:-60}      # [s] root file unchanged for this long (job id known)
@@ -76,6 +92,7 @@ ANA_LIST="$LOG_DIR/AUSana_raw2root_done.list"            # key<TAB>job id<TAB>da
 WF_LIST="$LOG_DIR/AUSwave_done.list"            # key<TAB>date   (waveform 2D plots made)
 STATUS_FILE="/tmp/precal_AUSana.status"
 STOP_FILE="/tmp/precal_AUSana.stop"
+REPORT_FILE="/tmp/precal_AUSana.report"   # "report" command: date of the report to make now
 INSTANCE_LOCK="/tmp/precal_AUSana.lock"
 
 SSH_CTRL="/tmp/precal-ana-ssh-%r@%h-%p"
@@ -85,11 +102,12 @@ SUKAP_COMMON="-p $SUKAP_PORT -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o
 sbash() { sshpass -e ssh $SUKAP_COMMON "$SUKAP_USER@$SUKAP_HOST" 'bash -s' 7>&-; }
 usage() {
     cat <<EOF
-Usage:  $0 [-date YYYYMMDD] [-replot] [-publish]
+Usage:  $0 [-date YYYYMMDD] [-replot] [-publish] [-report-time HHMM | -no-report]
         $0 status
   -date YYYYMMDD   only scans scan_YYYYMMDD_* on/after this date (default: all submitted points)
   -replot          remake merged CSVs + plots for every PMT once at start (and copy them to the web dir)
   -publish         copy the PNGs of every analysed PMT to the web dir once at start
+  -report-time HHMM  daily report time (default ${REPORT_TIME:0:2}:${REPORT_TIME:2:2});  -no-report: no daily report
   status           print the status of the running analysis
 Env overrides: VCUT POINT_OPTS PMT_CH_CANDIDATES WF_OPTS WF_PER_CYCLE INTERVAL ROOT_SETTLE
 EOF
@@ -118,10 +136,15 @@ while [ $# -gt 0 ]; do
         -date|--date) DATE_OPT="$2"; shift 2 ;;
         -replot|--replot) REPLOT=1; shift ;;
         -publish|--publish) PUBLISH=1; shift ;;
+        -report-time|--report-time) REPORT_TIME="${2/:/}"; shift 2 ;;
+        -no-report|--no-report) REPORT_TIME=""; shift ;;
         -h|--help|help) usage; exit 0 ;;
         *) echo "Unknown option: $1"; usage; exit 1 ;;
     esac
 done
+if [ -n "$REPORT_TIME" ] && ! [[ "$REPORT_TIME" =~ ^([01][0-9]|2[0-3])[0-5][0-9]$ ]]; then
+    echo "-report-time must be HHMM (got '$REPORT_TIME')"; exit 1
+fi
 if [ -n "$DATE_OPT" ]; then
     [[ "$DATE_OPT" =~ ^[0-9]{8}$ ]] || { echo "-date must be YYYYMMDD (got '$DATE_OPT')"; exit 1; }
     MIN_DATE=$DATE_OPT
@@ -136,7 +159,7 @@ done
 exec 7>"$INSTANCE_LOCK"
 flock -n 7 || { echo "1113-AUSUAP-auto.sh is already running.  (./1113-AUSUAP-auto.sh status)"; exit 1; }
 
-mkdir -p "$LOG_DIR"; touch "$ANA_LIST" "$WF_LIST"; rm -f "$STOP_FILE"
+mkdir -p "$LOG_DIR"; touch "$ANA_LIST" "$WF_LIST"; rm -f "$STOP_FILE" "$REPORT_FILE"
 [ -s "$SUBMIT_LIST" ] || echo "NOTE: $SUBMIT_LIST is empty – has 1113-AUSjobsubmission.sh submitted anything?"
 
 read -rsp "Password for $SUKAP_USER@$SUKAP_HOST (sukap): " SUKAP_PASS; echo
@@ -147,12 +170,14 @@ sshpass -e ssh $SUKAP_COMMON -O check "$SUKAP_USER@$SUKAP_HOST" &>/dev/null \
 echo "Checking the environment on sukap as $SUKAP_USER ..."
 CHK=$( { remote_env; cat <<EOF
 for f in '$POINT_SH' '$MERGE_PY' '$UAP_DIR/runners/aus_root2csv.py' '$UAP_DIR/uap/fit/aus_timing_late.py' \
-         '$UAP_DIR/config/aus_root2csv_charge_default.yaml' '$UAP_DIR/config/aus_root2csv_emg_default.yaml' '$WAVEFORM_PY'; do
+         '$UAP_DIR/config/aus_root2csv_charge_default.yaml' '$UAP_DIR/config/aus_root2csv_emg_default.yaml' '$WAVEFORM_PY' \
+         '$SUMMARY_PY' '$REPORT_PY'; do
     [ -r "\$f" ] || echo "NG: cannot read \$f  (UAP-Shifter branch 1116?)"
 done
-python3 -c 'import uproot, iminuit, scipy, yaml, pandas, matplotlib, uap.engine.csv2plot, uap.engine.root2csv' 2>&1 | tail -2 | sed 's/^/NG: python: /'
+python3 -c 'import uproot, iminuit, scipy, yaml, pandas, matplotlib, PIL, uap.engine.csv2plot, uap.engine.root2csv' 2>&1 | tail -2 | sed 's/^/NG: python: /'
 mkdir -p '$SUKAP_OUT_BASE' 2>/dev/null && [ -w '$SUKAP_OUT_BASE' ] || echo "NG: cannot write $SUKAP_OUT_BASE"
 mkdir -p '$WEB_BASE' 2>/dev/null && [ -w '$WEB_BASE' ] && chmod a+rx '$WEB_BASE' 2>/dev/null || echo "NG: cannot write $WEB_BASE"
+mkdir -p '$REPORT_DIR' 2>/dev/null && [ -w '$REPORT_DIR' ] || echo "NG: cannot write $REPORT_DIR"
 echo CHECK_END
 EOF
 } | sbash 2>&1)
@@ -184,7 +209,7 @@ worker() {
 
     ST_STATE="idle"; ST_LAST="-"; ST_NEXT="-"; ST_CUR=""
     ST_RUNNING=0; ST_READY=0; ST_WAITROOT=0; N_DONE=0; N_NG=0; N_PLOT=0; N_FAIL=0
-    ST_WFLEFT=0; N_WF=0; N_WFNG=0; N_PUB=0
+    ST_WFLEFT=0; N_WF=0; N_WFNG=0; N_PUB=0; ST_REPORT="-"; ST_NEXT_REPORT="-"; NEXT_REPORT=0
 
     write_status() {
         {
@@ -197,6 +222,7 @@ worker() {
             echo "Totals    : analysed $N_DONE   NG $N_NG   job failed (no root) $N_FAIL   PMT plots made $N_PLOT"
             echo "Waveform  : done $N_WF   NG $N_WFNG   left $ST_WFLEFT   (max $WF_PER_CYCLE per cycle)"
             echo "Web copy  : $N_PUB PMT update(s)  -> $WEB_BASE"
+            echo "Report    : last $ST_REPORT      next $ST_NEXT_REPORT"
             echo "Last cycle: $ST_LAST      Next cycle : $ST_NEXT"
             echo "Log       : $LOG_FILE"
             echo "Recent    :"
@@ -293,6 +319,9 @@ cp_png() { local dst=\$1; shift; local f; for f in "\$@"; do [ -f "\$f" ] && cp 
 cp_png '$w/charge'       '$pd'/theta*_phi*/charge/figures/**/*.png '$pd'/charge/*.png
 cp_png '$w/timing'       '$pd'/theta*_phi*/time/figures/**/*.png   '$pd'/time/*.png
 cp_png '$w/waveformdist' '$pd'/waveformdist/*.png
+mkdir -p '$w/charge/ped' '$w/allpoints'
+cp_png '$w/charge/ped'   '$pd'/pedfit/*.png '$pd'/pedfit/*.csv
+cp_png '$w/allpoints'    '$pd'/allpoints/*.png
 mkdir -p '$w/plots'
 for d in '$pd'/theta*_phi*/plots; do      # per-point plots: same names in every point -> point prefix
     p=\$(basename "\$(dirname "\$d")")
@@ -309,7 +338,7 @@ EOF
         r=$(publish_pmt "${sp%%/*}" "${sp#*/}")
         if [[ "$r" == PUB_OK* ]]; then
             N_PUB=$(( N_PUB + 1 ))
-            log "[WEB]     $sp  -> aus_daily_check/$sp/{charge,timing,waveformdist,plots}  (${r#PUB_OK:} png)"
+            log "[WEB]     $sp  -> aus_daily_check/$sp/{charge,charge/ped,timing,allpoints,waveformdist,plots}  (${r#PUB_OK:} files)"
         else
             log "[WEB NG]  $sp – ${r#PUB_NG:}"
         fi
@@ -325,10 +354,14 @@ EOF
     }
 
     # $1 scan  $2 pmt
-    merge_plot() {
+    merge_plot() {      # merged plots + pedestal / all-point summary -> "MERGE_PLOT_DONE|PMT_SUMMARY_DONE"
         local pd="$SUKAP_OUT_BASE/$1/$2"
-        { remote_env; echo "python3 '$MERGE_PY' '$pd' '$2' > '$pd/merge_plot.log' 2>&1; tail -1 '$pd/merge_plot.log'"; } \
-            | sbash 2>&1 | tail -1
+        { remote_env; cat <<EOF
+python3 '$MERGE_PY' '$pd' '$2' > '$pd/merge_plot.log' 2>&1; m=\$(tail -1 '$pd/merge_plot.log')
+python3 '$SUMMARY_PY' '$pd' '$2' --raw-base '$SUKAP_RAW_BASE' > '$pd/pmt_summary.log' 2>&1; s=\$(tail -1 '$pd/pmt_summary.log')
+echo "MP:\$m|\$s"
+EOF
+        } | sbash 2>&1 | grep '^MP:' | tail -1 | sed 's/^MP://'
     }
 
     point_ng() {   # $1 key  $2 job  $3 message
@@ -344,12 +377,58 @@ EOF
         local sp=$1 r
         ST_STATE="plotting  $sp"; ST_CUR=""; write_status
         r=$(merge_plot "${sp%%/*}" "${sp#*/}")
-        if [ "$r" = "MERGE_PLOT_DONE" ]; then
+        if [ "${r%%|*}" = "MERGE_PLOT_DONE" ]; then
             N_PLOT=$(( N_PLOT + 1 )); log "[PLOT]    $sp  -> charge/ time/ updated"
+            if [ "${r#*|}" = "PMT_SUMMARY_DONE" ]; then log "[SUMMARY] $sp  -> pedfit/ allpoints/ updated"
+            else log "[SUMMARY NG] $sp – ${r#*|}  (see <PMT>/pmt_summary.log)"; fi
             publish_one "$sp"     # copy this PMT to the web dir right away (not at the end of the cycle)
         else
-            log "[PLOT NG] $sp – ${r:-no output}  (see <PMT>/merge_plot.log)"
+            log "[PLOT NG] $sp – ${r%%|*}  (see <PMT>/merge_plot.log)"
         fi
+    }
+
+    # daily report: $1 YYYYMMDD (night) -> PDF on sukap + copy to WEB_BASE/daily_report
+    make_report() {
+        local d=$1 r
+        ST_STATE="daily report $d"; ST_CUR=""; write_status
+        r=$( { remote_env; cat <<EOF
+python3 '$REPORT_PY' --date '$d' --start '${REPORT_TIME:-0930}' --processed '$SUKAP_OUT_BASE' --raw-base '$SUKAP_RAW_BASE' \
+    --env-dir '$ENV_PLOT_DIR' --out-dir '$REPORT_DIR' --slot-map '$SLOT_MAP' > '$REPORT_DIR/report_$d.log' 2>&1
+r=\$(grep '^DAILY_REPORT_DONE' '$REPORT_DIR/report_$d.log' | tail -1)
+if [ -n "\$r" ]; then
+    mkdir -p '$WEB_BASE/daily_report' && cp -p '$REPORT_DIR/AUS_daily_report_$d.pdf' '$WEB_BASE/daily_report/' \
+        && chmod a+rx '$WEB_BASE/daily_report' && chmod a+r '$WEB_BASE/daily_report/AUS_daily_report_$d.pdf' \
+        && echo "REP_OK:\${r##* } pages" || echo "REP_OK:\${r##* } pages (web copy failed)"
+else
+    echo "REP_NG:\$(tail -1 '$REPORT_DIR/report_$d.log')"
+fi
+EOF
+        } | sbash 2>&1 | grep -E '^REP_' | tail -1)
+        ST_REPORT="$d ($(date '+%m/%d %H:%M'))"
+        if [[ "$r" == REP_OK* ]]; then
+            log "[REPORT]  $d  -> $REPORT_DIR/AUS_daily_report_$d.pdf, aus_daily_check/daily_report/  (${r#REP_OK:})"
+        else
+            ST_REPORT+=" NG"; log "[REPORT NG] $d – ${r#REP_NG:}  (see $REPORT_DIR/report_$d.log)"
+        fi
+    }
+    next_report() {
+        [ -n "$REPORT_TIME" ] || { echo 0; return; }
+        local t; t=$(date -d "today ${REPORT_TIME:0:2}:${REPORT_TIME:2:2}" +%s)
+        (( t <= $(date +%s) )) && t=$(date -d "tomorrow ${REPORT_TIME:0:2}:${REPORT_TIME:2:2}" +%s)
+        echo "$t"
+    }
+    maybe_report() {    # daily alarm or "report" command; called between points too
+        local d
+        if [ -f "$REPORT_FILE" ]; then
+            d=$(cat "$REPORT_FILE"); rm -f "$REPORT_FILE"
+            [[ "$d" =~ ^[0-9]{8}$ ]] || d=$(date -d yesterday +%Y%m%d)
+            make_report "$d"
+        fi
+        if (( NEXT_REPORT > 0 && $(date +%s) >= NEXT_REPORT )); then
+            make_report "$(date -d yesterday +%Y%m%d)"
+            NEXT_REPORT=$(next_report)
+        fi
+        (( NEXT_REPORT > 0 )) && ST_NEXT_REPORT=$(date -d "@$NEXT_REPORT" '+%m/%d %H:%M') || ST_NEXT_REPORT="off"
     }
 
     cycle_once() {
@@ -433,6 +512,7 @@ EOS
                 do_merge_plot "$prev"; unset 'DIRTY[$prev]'
             fi
             prev=$sp
+            maybe_report
             ST_STATE="point analysis  ($i/${#READY[@]})"; ST_CUR="$sp/$pt  (charge + timing fit + plots + SiPM)"; write_status
             r=$(analyse_point "${key%%/*}" "$scan" "$pmt" "$pt")
             if [[ "$r" == POINT_OK* ]]; then
@@ -464,7 +544,8 @@ EOS
     fi
     (( ${#PUBQ[@]} )) && publish_pending
 
-    log "[START]   watching $SUBMIT_LIST"
+    NEXT_REPORT=$(next_report); maybe_report
+    log "[START]   watching $SUBMIT_LIST$( [ -n "$REPORT_TIME" ] && echo ", daily report at ${REPORT_TIME:0:2}:${REPORT_TIME:2:2}")"
     while [ ! -f "$STOP_FILE" ]; do
         local cstart; cstart=$(date +%s)
         cycle_once
@@ -472,6 +553,7 @@ EOS
         [ -f "$STOP_FILE" ] || publish_pending
         ST_STATE="idle"
         while [ ! -f "$STOP_FILE" ]; do
+            maybe_report; ST_STATE="idle"
             local next=$(( cstart + INTERVAL ))
             (( $(date +%s) >= next )) && break
             ST_NEXT=$(date -d "@$next" '+%H:%M:%S'); write_status
@@ -490,7 +572,7 @@ exec 7>&-
 cleanup() {
     touch "$STOP_FILE"
     wait "$WPID" 2>/dev/null
-    rm -f "$STOP_FILE"
+    rm -f "$STOP_FILE" "$REPORT_FILE"
     sshpass -e ssh $SUKAP_COMMON -O exit "$SUKAP_USER@$SUKAP_HOST" &>/dev/null
     unset SSHPASS
 }
@@ -506,7 +588,8 @@ AUS analysis started  (PID $WPID)
   web    : sukap:$WEB_BASE/scan_.../<PMT>/{charge,timing,waveformdist,plots}
   cycle  : every $((INTERVAL/60)) min
   log    : $LOG_FILE
-Commands:  status | log | quit | help
+  report : $( [ -n "$REPORT_TIME" ] && echo "every day at ${REPORT_TIME:0:2}:${REPORT_TIME:2:2} -> $REPORT_DIR, $WEB_BASE/daily_report" || echo off)
+Commands:  status | log | report [YYYYMMDD] | quit | help
 EOF
 
 if [ -t 0 ]; then
@@ -516,13 +599,20 @@ if [ -t 0 ]; then
             case "$cmd" in
                 status|s|st)   cat "$STATUS_FILE" 2>/dev/null || echo "starting..." ;;
                 log|l)         tail -n 30 "$LOG_FILE" ;;
+                report|report\ *)
+                               d=${cmd#report}; d=${d// /}
+                               [ -z "$d" ] && d=$(date -d yesterday +%Y%m%d)
+                               if [[ "$d" =~ ^[0-9]{8}$ ]]; then echo "$d" > "$REPORT_FILE"
+                                   echo "daily report $d starts after the current step"
+                               else echo "usage: report [YYYYMMDD]"; fi ;;
                 quit|q|exit|stop)
                                echo "Stopping after the current point..."
                                cleanup; echo "Stopped."; exit 0 ;;
                 help|h|"?")    echo "status : show the status      log  : last 30 log lines"
+                               echo "report [YYYYMMDD] : make the daily report of that night now (default: yesterday)"
                                echo "quit   : stop (after the current point)" ;;
                 "")            ;;
-                *)             echo "unknown command '$cmd'  (status | log | quit | help)" ;;
+                *)             echo "unknown command '$cmd'  (status | log | report [YYYYMMDD] | quit | help)" ;;
             esac
             printf '> '
         fi

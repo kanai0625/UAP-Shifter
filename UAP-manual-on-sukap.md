@@ -426,6 +426,26 @@ python3 runners/aus_merge_plot.py $P PMT_label
 | `$P/time/aus_results.csv`, `relative_QE_*.png` | relative QE (SiPM normalised) |
 | `$P/time/arrival_time_*.png`, `TTS_*.png`, `late_fraction_*.png` | arrival time (μ), TTS (FWHM of the prompt EMG), late-pulse fraction |
 
+## AUS4b : pedestal summary, all-point images, daily report
+Pedestal of the charge fit and every point in one image (the automation runs it after AUS4):
+```
+python3 runners/aus_pmt_summary.py $P PMT_label --raw-base /disk03/hk04/precalib/production/aus
+```
+| file | content |
+|---|---|
+| `$P/pedfit/ped_<PMT>.csv` | point, theta, phi, mu, mu_err, sigma, sigma_err (pedestal mean / sigma of the charge fit) |
+| `$P/pedfit/ped_dist_<PMT>.png` | distributions of mu and sigma |
+| `$P/pedfit/ped_{mu,sigma}_map_<PMT>.png` | polar maps (angle = φ, radius = θ) |
+| `$P/pedfit/ped_{mu,sigma}_vs_point_<PMT>.png` | mu / sigma vs point number (measurement order = time of the raw wave0.dat) |
+| `$P/allpoints/allpoints_{charge,timing,sipm_timing}_<PMT>.png` | charge fit, timing fit (PMT), timing fit (SiPM) of every point, 8 × 8 per image (`_p2` above 64 points) |
+
+Daily report of one night (scans started DATE 09:30 – next day 09:30), made by the automation every day at 09:30:
+```
+python3 runners/aus_daily_report.py --date 20261116      # default: yesterday
+```
+→ `/disk03/hk04/precalib/production/aus/daily_report/AUS_daily_report_YYYYMMDD.pdf` and `public_html/precalib/aus_daily_check/daily_report/`.
+Page 1: every scan / PMT (PMT #1 / #2 from pmt_ch, `--slot-map 3:1,5:2`) with the events per point; page 2: ENV plot of the next day 09:00; then 6 pages per scan / PMT: all-point charge fit, all-point timing fit (PMT), gain map + gain vs θ, relative QE map + vs θ, TTS map + vs θ, all-point timing fit (SiPM).
+
 ## AUS5 : automation on the Shifter PC
 Run on the Shifter PC (precalib@10.200.102.69) in this order, each in its own terminal (commands: `status | log | quit | help`):
 ```
@@ -436,7 +456,7 @@ Run on the Shifter PC (precalib@10.200.102.69) in this order, each in its own te
 * `1113-AUSjobsubmission.sh` : `-date YYYYMMDD` (points written on/after that day), `-elec caendigi|hkelec`, `-dry`.
   Env: `NEVENT` (300000), `NSIGMA` (2.2), `VCUT` (2.0), `ELAPSE` (1:00:00), `MAX_ACTIVE` (100).
   Submitted points: `~/precal_transfer_logs/AUSjobs_raw2root_submitted.list` (new name: points of the pyrate era are submitted again).
-* `1113-AUSUAP-auto.sh` : `-date YYYYMMDD`, `-replot`, `-publish`.
+* `1113-AUSUAP-auto.sh` : `-date YYYYMMDD`, `-replot`, `-publish`, `-report-time HHMM` (daily report, default 09:30) or `-no-report`; command `report [YYYYMMDD]` makes a report now.
   Env: `VCUT` (2.0, same as the jobs), `POINT_OPTS` (extra options of `aus_run_point.sh`, default `-twin 100`).
   Analysed points: `~/precal_transfer_logs/AUSana_raw2root_done.list`.
 * Web (`/home/hkpd/public_html/precalib/aus_daily_check/scan_.../<PMT>/`):
